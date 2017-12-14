@@ -15,3 +15,5 @@
 
 include 'core', 'examples', 'clients', 'tools', 'streams', 'streams:examples', 'log4j-appender',
         'connect:api', 'connect:runtime', 'connect:json', 'connect:file'
+include 'learn'
+
