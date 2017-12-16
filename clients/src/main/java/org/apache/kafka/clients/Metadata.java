@@ -50,17 +50,31 @@ public final class Metadata {
     public static final long TOPIC_EXPIRY_MS = 5 * 60 * 1000;
     private static final long TOPIC_EXPIRY_NEEDS_UPDATE = -1L;
 
+    /* 两次发出更新 Cluster 保存的元数据信息的最小时间差，默认为 100ms。防止更新操作过于频繁而造成
+     * 网络阻塞和增加服务端压力。在 Kafka 中与重试操作有关的操作中，都有这种『退避(backoff)时间』
+     * 设计的身影 */
     private final long refreshBackoffMs;
+    /* 每隔多久更新一次 */
     private final long metadataExpireMs;
+    /* 表示 Kafka 集群元数据的版本号。Kafka 集群元数据每更新成功一次，version++ */
     private int version;
+    /* 记录上次更新元数据的时间戳（也包含更新失败的情况） */
     private long lastRefreshMs;
+    /* 上一次成功更新的时间戳 */
     private long lastSuccessfulRefreshMs;
+    /* 记录 Kafka 集群的元数据 */
     private Cluster cluster;
+    /* 标识是否强制更新 Cluster，这是触发 Sender 线程更新集群元数据的条件之一 */
     private boolean needUpdate;
     /* Topics with expiry time */
+    /* 记录了当前已知的所有 topic，在 cluster 字段中记录了 Topic 最新的元数据，并记录了其数据对应的过期时间 */
     private final Map<String, Long> topics;
+    /* 监听 Metadata 更新的监听器集合。自定义 Metadata 监听实现 MetadataListener.onMetadataUpdate()
+    * 方法即可，在更新 Metadata 中的 cluster 字段之前，会通知 listener 集合中全部 Listener 对象*/
     private final List<Listener> listeners;
     private final ClusterResourceListeners clusterResourceListeners;
+    /* 是否需要更新全部 Topic 的元数据，一般情况下 KafkaProducer 只维护它用到的 Topic 的元数据，
+     * 是集群中全部 Topic 的子集 */
     private boolean needMetadataForAllTopics;
     private final boolean topicExpiryEnabled;
 
@@ -149,7 +163,9 @@ public final class Metadata {
         }
         long begin = System.currentTimeMillis();
         long remainingWaitMs = maxWaitMs;
+        /* 比较版本号，通过版本号比较集群元数据是否更新完成 */
         while (this.version <= lastVersion) {
+            /* 主线程与 Sender 通过 wait/notify 同步，更新元数据的操作则交给 Sender 线程去完成 */
             if (remainingWaitMs != 0)
                 wait(remainingWaitMs);
             long elapsed = System.currentTimeMillis() - begin;

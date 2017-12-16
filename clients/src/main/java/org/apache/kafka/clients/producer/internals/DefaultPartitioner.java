@@ -35,6 +35,8 @@ import org.apache.kafka.common.utils.Utils;
  */
 public class DefaultPartitioner implements Partitioner {
 
+    /* counter 初始化为一个随机数，注意，这里是一个 AtomicInteger */
+    /* KafkaProducer 必须是一个线程安全类，多个业务发送数据时候也必须保证 Partitioner 线程安全 */
     private final AtomicInteger counter = new AtomicInteger(new Random().nextInt());
 
     public void configure(Map<String, ?> configs) {}
@@ -50,10 +52,15 @@ public class DefaultPartitioner implements Partitioner {
      * @param cluster The current cluster metadata
      */
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
+        /* 从 Cluster 中获取对应的 Topic 的分区信息 */
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
+        /* 分区数量 */
         int numPartitions = partitions.size();
+        /* 没有 key 的情况 */
         if (keyBytes == null) {
+            /* 递增 counter */
             int nextValue = counter.getAndIncrement();
+            /* 选择 avaliablePartitions */
             List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
             if (availablePartitions.size() > 0) {
                 int part = Utils.toPositive(nextValue) % availablePartitions.size();
@@ -62,7 +69,7 @@ public class DefaultPartitioner implements Partitioner {
                 // no partitions are available, give a non-available partition
                 return Utils.toPositive(nextValue) % numPartitions;
             }
-        } else {
+        } else { /* 消息有可以的情况 */
             // hash the keyBytes to choose a partition
             return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
         }

@@ -129,26 +129,44 @@ import java.util.concurrent.atomic.AtomicReference;
 public class KafkaProducer<K, V> implements Producer<K, V> {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaProducer.class);
+    /* clientId 的生成器，如果没有明确指定 client 的 id，则使用字段生成一个 ID */
     private static final AtomicInteger PRODUCER_CLIENT_ID_SEQUENCE = new AtomicInteger(1);
     private static final String JMX_PREFIX = "kafka.producer";
 
+    /* 此生产者的唯一标识 */
     private String clientId;
+    /* 分区选择器，根据一定的策略，将消息路由到合适的分区 */
     private final Partitioner partitioner;
+    /* 消息的最大长度，这个长度包含了消息头、序列化后的 key 和序列化后的 value 的长度 */
     private final int maxRequestSize;
+    /* 发送单个消息的缓冲区大小 */
     private final long totalMemorySize;
+    /* 存储 Kafka 集群的元数据 */
     private final Metadata metadata;
+    /* RecordAccumulator，用于手机并缓存消息，等待 Sender 线程发送 */
     private final RecordAccumulator accumulator;
+    /* 发送消息的 Sender 任务，实现了 Runnable 接口，在 ioThread 线程中执行 */
     private final Sender sender;
     private final Metrics metrics;
+    /* 执行 Sender 任务发送消息的线程，称为 『Sender 线程』 */
     private final Thread ioThread;
+    /* 压缩算法，可选项有 none、gzip、snappy、lz4.
+    * 这是针对 RecordAccumulator 中多条消息进行的压缩，所以消息越多，压缩效果越好 */
     private final CompressionType compressionType;
     private final Sensor errors;
     private final Time time;
+    /* key 的序列化器 */
     private final Serializer<K> keySerializer;
+    /* value 的序列化器 */
     private final Serializer<V> valueSerializer;
+    /* 配置对象，使用反射初始化 KafkaProducer 配置的相对对象 */
     private final ProducerConfig producerConfig;
+    /* 等待更新 Kafka 集群元数据的最大时长 */
     private final long maxBlockTimeMs;
+    /* 消息的超时时间，也就是从消息发送到收到 ACK 响应的最长时长 */
     private final int requestTimeoutMs;
+    /* ProducerInterceptor 集合，ProducerInterceptor 可以在消息发送之前对其进行拦截或修改；
+    * 也可以先于用户的 Callback，对 ACK 响应进行预处理 */
     private final ProducerInterceptors<K, V> interceptors;
 
     /**
@@ -222,6 +240,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     MetricsReporter.class);
             reporters.add(new JmxReporter(JMX_PREFIX));
             this.metrics = new Metrics(metricConfig, reporters, time);
+            /* 通过反色机制实例化配置的 partitioner 类，keySerializer 类，valueSerializer 类 */
             this.partitioner = config.getConfiguredInstance(ProducerConfig.PARTITIONER_CLASS_CONFIG, Partitioner.class);
             long retryBackoffMs = config.getLong(ProducerConfig.RETRY_BACKOFF_MS_CONFIG);
             if (keySerializer == null) {
@@ -248,6 +267,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             this.interceptors = interceptorList.isEmpty() ? null : new ProducerInterceptors<>(interceptorList);
 
             ClusterResourceListeners clusterResourceListeners = configureClusterResourceListeners(keySerializer, valueSerializer, interceptorList, reporters);
+            // 创建并更新 Kafka 集群的元数据
             this.metadata = new Metadata(retryBackoffMs, config.getLong(ProducerConfig.METADATA_MAX_AGE_CONFIG), true, clusterResourceListeners);
             this.maxRequestSize = config.getInt(ProducerConfig.MAX_REQUEST_SIZE_CONFIG);
             this.totalMemorySize = config.getLong(ProducerConfig.BUFFER_MEMORY_CONFIG);
@@ -289,6 +309,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 this.requestTimeoutMs = config.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
             }
 
+            /* 创建 RecordAccumulator */
             this.accumulator = new RecordAccumulator(config.getInt(ProducerConfig.BATCH_SIZE_CONFIG),
                     this.totalMemorySize,
                     this.compressionType,
@@ -300,6 +321,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config.getList(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG));
             this.metadata.update(Cluster.bootstrap(addresses), time.milliseconds());
             ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config.values());
+            /* 创建 NetworkClient，这个是 KafkaProducer 网络 I/O 的核心，在后面会详细介绍 */
             NetworkClient client = new NetworkClient(
                     new Selector(config.getLong(ProducerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG), this.metrics, time, "producer", channelBuilder),
                     this.metadata,
@@ -321,6 +343,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     clientId,
                     this.requestTimeoutMs);
             String ioThreadName = "kafka-producer-network-thread" + (clientId.length() > 0 ? " | " + clientId : "");
+            /* 启动 Sender 对应的线程 */
             this.ioThread = new KafkaThread(ioThreadName, this.sender, true);
             this.ioThread.start();
 
@@ -522,6 +545,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     private ClusterAndWaitTime waitOnMetadata(String topic, Integer partition, long maxWaitMs) throws InterruptedException {
         // add topic to metadata topic list if it is not there already and reset expiry
         metadata.add(topic);
+        /* 获取分区信息 */
         Cluster cluster = metadata.fetch();
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
@@ -538,9 +562,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         // is stale and the number of partitions for this topic has increased in the meantime.
         do {
             log.trace("Requesting metadata update for topic {}.", topic);
+            /* 获取失败之后调用 requestUpdate() 方法，并获取当前元数据版本号 */
             int version = metadata.requestUpdate();
+            /* 唤醒 Sender 线程 */
             sender.wakeup();
             try {
+                /* 阻塞等待元数据更新完毕 */
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
@@ -548,8 +575,10 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
             cluster = metadata.fetch();
             elapsed = time.milliseconds() - begin;
+            /* 检测超时时间 */
             if (elapsed >= maxWaitMs)
                 throw new TimeoutException("Failed to update metadata after " + maxWaitMs + " ms.");
+            /* 检测权限 */
             if (cluster.unauthorizedTopics().contains(topic))
                 throw new TopicAuthorizationException(topic);
             remainingWaitMs = maxWaitMs - elapsed;
