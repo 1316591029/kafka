@@ -1,0 +1,17 @@
+@startuml
+
+class RecordMetadata
+class FutureRecordMetadata
+class ProduceRequestResult
+class RecordBatch
+class Thunk
+
+
+RecordMetadata "<create>" <|.. FutureRecordMetadata
+ProduceRequestResult "1" <--* "1" FutureRecordMetadata
+ProduceRequestResult "1 <create>" <--* "1" RecordBatch
+RecordBatch "1" *--> "<create>" Thunk
+FutureRecordMetadata "1" <--* "1" Thunk
+
+
+@enduml

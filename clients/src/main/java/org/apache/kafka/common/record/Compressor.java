@@ -92,6 +92,7 @@ public class Compressor {
     public long maxTimestamp;
 
     public Compressor(ByteBuffer buffer, CompressionType type) {
+        /* 从 KafkaProducer 传递过来的压缩类型 */
         this.type = type;
         this.initPos = buffer.position();
 
@@ -108,6 +109,7 @@ public class Compressor {
 
         // create the stream
         bufferStream = new ByteBufferOutputStream(buffer);
+        /* 下面根据压缩类型创建合适的压缩流 */
         appendStream = wrapForOutput(bufferStream, type, COMPRESSION_DEFAULT_BUFFER_SIZE);
     }
 
@@ -244,13 +246,14 @@ public class Compressor {
 
     public static DataOutputStream wrapForOutput(ByteBufferOutputStream buffer, CompressionType type, int bufferSize) {
         try {
-            switch (type) {
-                case NONE:
+            switch (type) {  /* 根据不同的类型选择创建不同压缩流 */
+                case NONE: /* 不压缩的方式 */
                     return new DataOutputStream(buffer);
                 case GZIP:
-                    return new DataOutputStream(new GZIPOutputStream(buffer, bufferSize));
+                    return new DataOutputStream(new GZIPOutputStream(buffer, bufferSize) /* 使用 JDK 自带的包 */);
                 case SNAPPY:
                     try {
+                        /* 使用额外引入的依赖包，为了在不使用 Snappy 压缩方式时，减少依赖包，使用反射的方式动态创建 */
                         OutputStream stream = (OutputStream) snappyOutputStreamSupplier.get().newInstance(buffer, bufferSize);
                         return new DataOutputStream(stream);
                     } catch (Exception e) {
