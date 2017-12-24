@@ -71,20 +71,25 @@ public final class RecordBatch {
 
     /**
      * Append the record to the current record set and return the relative offset within that record set
-     * 
+     * 尝试将消息添加到当前的 RecordBatch 中缓存
      * @return The RecordSend corresponding to this record or null if there isn't sufficient room.
      */
     public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Callback callback, long now) {
+        /* 估算剩余空间不足，前面说过，这不是一个准确值 */
         if (!this.records.hasRoomFor(key, value)) {
             return null;
         } else {
+            /* 向 MemoryRecords 中添加数据。注意，offsetCounter 是在 RecordBatch 中的偏移量 */
             long checksum = this.records.append(offsetCounter++, timestamp, key, value);
+            /*  更新统计信息 */
             this.maxRecordSize = Math.max(this.maxRecordSize, Record.recordSize(key, value));
             this.lastAppendTime = now;
+            /* 创建 FutureRecordMetadata 对象 */
             FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount,
                                                                    timestamp, checksum,
                                                                    key == null ? -1 : key.length,
                                                                    value == null ? -1 : value.length);
+            /* 将用户自定义 CallBack 和 FutureRecordMetadata 封装成 Thunk，保存到 thunks 集合中 */
             if (callback != null)
                 thunks.add(new Thunk(callback, future));
             this.recordCount++;
@@ -108,21 +113,24 @@ public final class RecordBatch {
         for (int i = 0; i < this.thunks.size(); i++) {
             try {
                 Thunk thunk = this.thunks.get(i);
-                if (exception == null) {
+                if (exception == null) { /* 正常处理完成 */
                     // If the timestamp returned by server is NoTimestamp, that means CreateTime is used. Otherwise LogAppendTime is used.
+                    /* 将服务端返回的信息（offset 和 timestamp）和消息的其他信息封装成 RecordMetadata */
                     RecordMetadata metadata = new RecordMetadata(this.topicPartition,  baseOffset, thunk.future.relativeOffset(),
                                                                  timestamp == Record.NO_TIMESTAMP ? thunk.future.timestamp() : timestamp,
                                                                  thunk.future.checksum(),
                                                                  thunk.future.serializedKeySize(),
                                                                  thunk.future.serializedValueSize());
+                    /* 调用详细对应的自定义 Callback */
                     thunk.callback.onCompletion(metadata, null);
-                } else {
+                } else { /* 处理过程中出现异常，注意，第一个参数为 null，与上面情况刚好相反 */
                     thunk.callback.onCompletion(null, exception);
                 }
             } catch (Exception e) {
                 log.error("Error executing user-provided callback on message for topic-partition {}:", topicPartition, e);
             }
         }
+        /* 标识整个 RecordBatch 都已经处理完成 */
         this.produceFuture.done(topicPartition, baseOffset, exception);
     }
 
