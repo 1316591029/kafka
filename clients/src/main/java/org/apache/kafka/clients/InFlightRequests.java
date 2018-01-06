@@ -87,7 +87,8 @@ final class InFlightRequests {
     public boolean canSendMore(String node) {
         Deque<ClientRequest> queue = requests.get(node);
         return queue == null || queue.isEmpty() ||
-               (queue.peekFirst().request().completed() && queue.size() < this.maxInFlightRequestsPerConnection);
+               (queue.peekFirst().request().completed() /* 为 true 表示当前队头的请求以及发送完成 */
+                       && queue.size() < this.maxInFlightRequestsPerConnection /* 判断 InFlightRequest 对垒中是否堆积过多请求 */);
     }
 
     /**

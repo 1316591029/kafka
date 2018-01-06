@@ -30,10 +30,13 @@ import org.apache.kafka.common.utils.Utils;
 
 public class KafkaChannel {
     private final String id;
+    // 根据网络协议的不同，提供不同的子类，而对 KafkaChannel 提供统一的接口，典型策略模式
     private final TransportLayer transportLayer;
     private final Authenticator authenticator;
     private final int maxReceiveSize;
+    // 写时用的缓存，底层是 ByteBuffer 实现
     private NetworkReceive receive;
+    // 读时用的缓存，底层是 ByteBuffer 实现
     private Send send;
 
     public KafkaChannel(String id, TransportLayer transportLayer, Authenticator authenticator, int maxReceiveSize) throws IOException {
@@ -121,7 +124,8 @@ public class KafkaChannel {
     public void setSend(Send send) {
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress.");
-        this.send = send;
+        this.send = send; // 设置 send 字段
+        // 关注 Channel 的 OP_WRITE 事件
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
@@ -132,6 +136,13 @@ public class KafkaChannel {
             receive = new NetworkReceive(maxReceiveSize, id);
         }
 
+        /*
+         * receive() 方法从 transportLayer 中读取数据到 NetworkReceive 对象中。
+         * 假设并没有读完一个完整的 NetworkReceive，则下次触发 OP_READ 事件时继续
+         * 填充此 NetworkReceive对象；
+         * 如果读取了一个完整的 NetworkReceive 对象，则将 receive 置空，下次触发读操作时，
+         * 创建新的 NetworkReceive 对象
+         */
         receive(receive);
         if (receive.complete()) {
             receive.payload().rewind();
@@ -155,7 +166,10 @@ public class KafkaChannel {
     }
 
     private boolean send(Send send) throws IOException {
+        // 如果 send 在一次 write 调用时没有发送完，SelectionKey 的 OP_WRITE 事件没有取消，
+        // 还会继续监听此 Channel 的 OP_WRITE 事件，直到整个 send 请求发送完毕才取消
         send.writeTo(transportLayer);
+        // 判断发送是否完成是通过 ByteBuffer 中是否还有剩余字节来判断的
         if (send.completed())
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
 

@@ -45,6 +45,7 @@ public class ProduceRequest extends AbstractRequest {
 
     private final short acks;
     private final int timeout;
+    /* 有效负载 */
     private final Map<TopicPartition, ByteBuffer> partitionRecords;
 
     public ProduceRequest(short acks, int timeout, Map<TopicPartition, ByteBuffer> partitionRecords) {

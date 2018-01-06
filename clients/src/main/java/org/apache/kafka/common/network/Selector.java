@@ -80,19 +80,31 @@ public class Selector implements Selectable {
     public static final long NO_IDLE_TIMEOUT_MS = -1;
     private static final Logger log = LoggerFactory.getLogger(Selector.class);
 
+    // 用来监听网络 I/O 事件
     private final java.nio.channels.Selector nioSelector;
+    // 维护了 NodeId 与 KafkaChannel 之间的映射关系，表示生产者客户端与各个 Node 之间的网络连接
+    // KafkaChannel 是在 SocketChannel 上的又一层封装
     private final Map<String, KafkaChannel> channels;
+    // 记录已经完全发送出去的请求
     private final List<Send> completedSends;
+    // 记录已经完全接收到的请求
     private final List<NetworkReceive> completedReceives;
+    // 暂存一次 OP_READ 事件处理过程中读取到的全部请求。当一次 OP_READ 事件处理完成之后，
+    // 会将 stageReceives 集合中的请求保存到 completeReceives 集合中
     private final Map<KafkaChannel, Deque<NetworkReceive>> stagedReceives;
     private final Set<SelectionKey> immediatelyConnectedKeys;
+    // 记录一次 poll 过程的断开的连接
     private final List<String> disconnected;
+    // 记录一次 poll 过程的新建的连接
     private final List<String> connected;
+    // 记录向哪些 Node 发送的请求失败了
     private final List<String> failedSends;
     private final Time time;
     private final SelectorMetrics sensors;
     private final String metricGrpPrefix;
     private final Map<String, String> metricTags;
+    // 用于创建 KafkaChannel 的 Builder。根据不同配置创建不同 TransportLayer 子类，
+    // 然后创建 KafkaChannel。
     private final ChannelBuilder channelBuilder;
     private final int maxReceiveSize;
     private final boolean metricsPerConnection;
@@ -163,17 +175,27 @@ public class Selector implements Selectable {
         if (this.channels.containsKey(id))
             throw new IllegalStateException("There is already a connection for id " + id);
 
+        // 创建 SocketChannel
         SocketChannel socketChannel = SocketChannel.open();
+        // 配置为非阻塞模式
         socketChannel.configureBlocking(false);
         Socket socket = socketChannel.socket();
+        // 设置为长连接
         socket.setKeepAlive(true);
+        // 设置 SO_SNDBUF 大小
         if (sendBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
             socket.setSendBufferSize(sendBufferSize);
+        // 设置 SO_RCVBUF 大小
         if (receiveBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
             socket.setReceiveBufferSize(receiveBufferSize);
         socket.setTcpNoDelay(true);
         boolean connected;
         try {
+            /*
+             * 因为是非阻塞方式，所有 SocketChannel.connect() 方法是发起一个连接，connect 方法
+             * 在连接正式建立之前就可能返回，在后面会通过 KSelector.finishConnect() 方法确认连接
+             * 是否真正建立了
+             */
             connected = socketChannel.connect(address);
         } catch (UnresolvedAddressException e) {
             socketChannel.close();
@@ -182,9 +204,13 @@ public class Selector implements Selectable {
             socketChannel.close();
             throw e;
         }
+        // 将这个 socketChannel 注册到 nioSelector 上，并关注 OP_CONNECT 事件
         SelectionKey key = socketChannel.register(nioSelector, SelectionKey.OP_CONNECT);
+        // 创建 KafkaChannel
         KafkaChannel channel = channelBuilder.buildChannel(id, key, maxReceiveSize);
+        // 将 KafkaChannel 注册到 key 上
         key.attach(channel);
+        // 将 NodeId 和 KafkaChannel 绑定，放到 channels 中管理
         this.channels.put(id, channel);
 
         if (connected) {
@@ -239,6 +265,7 @@ public class Selector implements Selectable {
     public void send(Send send) {
         KafkaChannel channel = channelOrFail(send.destination());
         try {
+            // 缓存 RequestSend，并关注 OP_WRITE 事件
             channel.setSend(send);
         } catch (CancelledKeyException e) {
             this.failedSends.add(send.destination());
@@ -283,15 +310,19 @@ public class Selector implements Selectable {
 
         /* check ready keys */
         long startSelect = time.nanoseconds();
+        // 等待 I/O 事件发生
         int readyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());
 
         if (readyKeys > 0 || !immediatelyConnectedKeys.isEmpty()) {
+            // 处理 IO 事件
             pollSelectionKeys(this.nioSelector.selectedKeys(), false, endSelect);
             pollSelectionKeys(immediatelyConnectedKeys, true, endSelect);
         }
 
+        // 读取到了一个完整的 NetworkReceive
+        // 将 stagedReceives 复制到 completedReceives 集合中
         addToCompletedReceives();
 
         long endIo = time.nanoseconds();
@@ -299,6 +330,7 @@ public class Selector implements Selectable {
 
         // we use the time at the end of select to ensure that we don't close any connections that
         // have just been processed in pollSelectionKeys
+        // 关闭长期空闲的连接
         maybeCloseOldestConnection(endSelect);
     }
 
@@ -309,6 +341,7 @@ public class Selector implements Selectable {
         while (iterator.hasNext()) {
             SelectionKey key = iterator.next();
             iterator.remove();
+            // 之前创建连接时，将 KafkaChannel 注册到 key 上，就是为了在这里获取
             KafkaChannel channel = channel(key);
 
             // register all per-connection metrics at once
@@ -319,7 +352,9 @@ public class Selector implements Selectable {
             try {
 
                 /* complete any connections that have finished their handshake (either normally or immediately) */
+                // 对 connect 方法返回 true 或 OP_CONNECTION 事件的处理
                 if (isImmediatelyConnected || key.isConnectable()) {
+                    // finishConnect 方法会先检测 sockChannel 是否建立完成，建立后，会取消对 OP_CONNECT 事件关注，开始关注 OP_READ 事件
                     if (channel.finishConnect()) {
                         this.connected.add(channel.id());
                         this.sensors.connectionCreated.record();
@@ -330,23 +365,35 @@ public class Selector implements Selectable {
                                 socketChannel.socket().getSoTimeout(),
                                 channel.id());
                     } else
-                        continue;
+                        continue; // 连接未完成，则跳过对此 Channel 的后续处理
                 }
 
                 /* if channel is not ready finish prepare */
+                // 调用 KafkaChannel.prepare() 方法进行身份验证
                 if (channel.isConnected() && !channel.ready())
                     channel.prepare();
 
                 /* if channel is ready read from any connections that have readable data */
+                // OP_READ 事件处理
                 if (channel.ready() && key.isReadable() && !hasStagedReceive(channel)) {
                     NetworkReceive networkReceive;
                     while ((networkReceive = channel.read()) != null)
+                        /*
+                         * 上面 channel.read() 读取到一个完整的 NetworkReceive，将其添加到 stageReceives 中保存
+                         * 若读取不到一个完整的 NetworkReceive，则返回 null，下次处理 OP_READ 事件时，继续读取，直至读取到
+                         * 一个完整的 NetworkReceive
+                         */
                         addToStagedReceives(channel, networkReceive);
                 }
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
+                // OP_WRITE 事件处理
                 if (channel.ready() && key.isWritable()) {
                     Send send = channel.write();
+                    /*
+                     * 上面 channel.write 方法将 KafkaChannel.send 字段发送出去，如果未完成发送，则返回 null，
+                     * 如果完成发送，则返回 send，并添加到 completeSends 集合中，待后续处理
+                     */
                     if (send != null) {
                         this.completedSends.add(send);
                         this.sensors.recordBytesSent(channel.id(), send.size());
@@ -365,6 +412,7 @@ public class Selector implements Selectable {
                     log.debug("Connection with {} disconnected", desc, e);
                 else
                     log.warn("Unexpected error from {}; closing connection", desc, e);
+                // 抛出异常，则认为连接关闭，将对应 NodeId 添加到 disconnected 集合
                 close(channel);
                 this.disconnected.add(channel.id());
             }
@@ -740,6 +788,7 @@ public class Selector implements Selectable {
 
     // helper class for tracking least recently used connections to enable idle connection closing
     private static class IdleExpiryManager {
+        // 用来记录各个连接的使用情况，并根据关闭空闲时间超过 connectionsMaxIdleNanos 的连接
         private final Map<String, Long> lruConnections;
         private final long connectionsMaxIdleNanos;
         private long nextIdleCloseCheckTime;
