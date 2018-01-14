@@ -497,29 +497,46 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaConsumer.class);
     private static final long NO_CURRENT_THREAD = -1L;
+    // clientId 的生成器，如果没有明确指定 client 的 Id，则使用字段生成一个 ID
     private static final AtomicInteger CONSUMER_CLIENT_ID_SEQUENCE = new AtomicInteger(1);
     private static final String JMX_PREFIX = "kafka.consumer";
 
+    // Consumer 的唯一标识
     private final String clientId;
+    // 控制着 Consumer 与服务端 GroupCoordinator 之间的通信逻辑，可将其理解
+    // 成 Consumer 与服务端 GroupCoordinator 通信的门面
     private final ConsumerCoordinator coordinator;
     private final Deserializer<K> keyDeserializer;
     private final Deserializer<V> valueDeserializer;
+    // 负责从服务端获取消息
     private final Fetcher<K, V> fetcher;
+    /*
+     * ConsumerInterceptor 集合，ConsumerInterceptor.onConsumer() 方法可以在消息通过
+     * poll() 方法返回给用户之前对其进行拦截或修改；ConsumerInterceptor.onCommit() 方法
+     * 也可以在服务端返回提交 offset 成哥的响应时对其进行拦截或修改
+     */
     private final ConsumerInterceptors<K, V> interceptors;
 
     private final Time time;
+    // 负责消费者的消费状态
     private final ConsumerNetworkClient client;
     private final Metrics metrics;
+    // 维护了消费者的消费状态
     private final SubscriptionState subscriptions;
+    // 记录了整个 Kafka 集群的元信息
     private final Metadata metadata;
     private final long retryBackoffMs;
     private final long requestTimeoutMs;
     private volatile boolean closed = false;
 
+    // KafkaConsumer 的 acquire() 和 release() 方法实现了一个『轻量级锁』，并非真正的锁，仅是
+    // 检测是否有多线程并发操作 KafkaConsumer 而已
     // currentThread holds the threadId of the current thread accessing KafkaConsumer
     // and is used to prevent multi-threaded access
+    // 当前使用 KafkaConsumer 的线程 Id
     private final AtomicLong currentThread = new AtomicLong(NO_CURRENT_THREAD);
     // refcount is used to allow reentrant access by the thread who has acquired currentThread
+    // 当前使用 KafkaConsumer 的线程重入次数
     private final AtomicInteger refcount = new AtomicInteger(0);
 
     /**
