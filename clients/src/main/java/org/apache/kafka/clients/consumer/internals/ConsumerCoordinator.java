@@ -64,14 +64,23 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     private static final Logger log = LoggerFactory.getLogger(ConsumerCoordinator.class);
 
+    /*
+     * PartitionAssignor 列表。在消费者发送的 JoinGroupRequest 请求中包含了消费者自身支持的
+     * PartitionAssignor 信息，GroupCoordinator 从所有消费者都支持的分配策略中选择一个，通知
+     * Leader 使用此分配策略进行分区分配。
+     * 此字段的值通过 partition.assignment.strategy 参数配置，可以配置多个
+     */
     private final List<PartitionAssignor> assignors;
+    // 记录了 Kafka 集群的元数据
     private final Metadata metadata;
     private final ConsumerCoordinatorMetrics sensors;
     private final SubscriptionState subscriptions;
     private final OffsetCommitCallback defaultOffsetCommitCallback;
+    // 是否开启自动提交 offset
     private final boolean autoCommitEnabled;
     private final int autoCommitIntervalMs;
     private final ConsumerInterceptors<?, ?> interceptors;
+    // 标识是否排除内部 Topic
     private final boolean excludeInternalTopics;
 
     // this collection must be thread-safe because it is modified from the response handler
@@ -80,7 +89,9 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     private boolean isLeader = false;
     private Set<String> joinedSubscription;
+    // 用来存储 Metadata 的快照信息，主要用来检测 Topic 是否发生了分区数量的变化
     private MetadataSnapshot metadataSnapshot;
+    // 用来存储 Metadata 的快照信息，检测 Partition 分配过程中有没有发生分区数量的变化
     private MetadataSnapshot assignmentSnapshot;
     private long nextAutoCommitDeadline;
 
@@ -172,14 +183,16 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 if (!cluster.unauthorizedTopics().isEmpty())
                     throw new TopicAuthorizationException(new HashSet<>(cluster.unauthorizedTopics()));
 
+                // AUTO_PATTERN 模式的处理
                 if (subscriptions.hasPatternSubscription())
                     updatePatternSubscription(cluster);
 
                 // check if there are any changes to the metadata which should trigger a rebalance
+                // 检测是否为 AUTO_PATTERN 或 AUTO_TOPICS 模式
                 if (subscriptions.partitionsAutoAssigned()) {
-                    MetadataSnapshot snapshot = new MetadataSnapshot(subscriptions, cluster);
-                    if (!snapshot.equals(metadataSnapshot))
-                        metadataSnapshot = snapshot;
+                    MetadataSnapshot snapshot = new MetadataSnapshot(subscriptions, cluster); // 创建快照
+                    if (!snapshot.equals(metadataSnapshot)) // 比较快照
+                        metadataSnapshot = snapshot; // 记录快照
                 }
             }
         });

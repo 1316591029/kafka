@@ -52,35 +52,67 @@ public class SubscriptionState {
     private static final String SUBSCRIPTION_EXCEPTION_MESSAGE =
             "Subscription to topics, partitions and pattern are mutually exclusive";
 
+    /**
+     * 内部枚举类，表示订阅 Topic 的模式
+     */
     private enum SubscriptionType {
-        NONE, AUTO_TOPICS, AUTO_PATTERN, USER_ASSIGNED
+        NONE, // SubscriptionState.subscriptionType 的初始值
+        AUTO_TOPICS,  // 按照指定的 Topic 名字进行订阅，自动分配分区
+        AUTO_PATTERN, // 按照指定的正则表达式匹配 Topic 进行订阅，自动分配分区
+        USER_ASSIGNED // 用户手动指定消费者消费的 Topic 以及分区编号
     }
 
     /* the type of subscription */
     private SubscriptionType subscriptionType;
 
     /* the pattern user has requested */
+    /*
+     * 使用 AUTO_PATTERN 模式时，是按照此字段记录的正则表达式对所有 Topic 进行匹配
+     * 对匹配符合的 Topic 进行订阅
+     */
     private Pattern subscribedPattern;
 
     /* the list of topics the user has requested */
+    /*
+     * 如果使用 AUTO_PATTERN 或 AUTO_TOPICS 模式，则使用此集合记录所有订阅的 Topic。
+     * 向 subscription 集合中添加数据的方法只有 changeSubscription() 方法，而调用
+     * changeSubscription() 方法的地方有两处，可自行通过 idea 查看
+     */
     private Set<String> subscription;
 
     /* the list of partitions the user has requested */
+    /*
+     * 如果使用 USER_ASSIGNED 模式，则此集合记录了分配给当前消费者的 TopicPartition 集合。
+     * SubscriptionType 模式是互斥的，所以 userAssignment 集合与 subscription 集合也是互斥的
+     */
     private Set<TopicPartition> userAssignment;
 
     /* the list of topics the group has subscribed to (set only for the leader on join group completion) */
+    /*
+     * 之前说过 Consumer Group 会选举出一个 Leader，Leader 使用该集合记录 Consumer Group 中所有消费者订阅的
+     * Topic，而其他 Follower 的该集合中只保存了其自身的订阅的 Topic
+     */
     private final Set<String> groupSubscription;
 
     /* the partitions that are currently assigned, note that the order of partition matters (see FetchBuilder for more details) */
+    /*
+     * 无论使用什么订阅模式，都会使用该集合记录每个 TopicPartition 的消费状态
+     */
     private final PartitionStates<TopicPartitionState> assignment;
 
     /* do we need to request the latest committed offsets from the coordinator? */
+    /*
+     * 标记是否需要从 GroupCoordinator 获取最近提交的 offset。
+     * 当出现异步提交 offset 操作或是 Rebalance 操作刚完成时会将其置为 true，
+     * 成功获取最近提交 offset 之后会设置为 false
+     */
     private boolean needsFetchCommittedOffsets;
 
     /* Default offset reset strategy */
     private final OffsetResetStrategy defaultResetStrategy;
 
     /* Listener to be invoked when assignment changes */
+    // 用于监听分区分配操作
     private ConsumerRebalanceListener listener;
 
     public SubscriptionState(OffsetResetStrategy defaultResetStrategy) {
@@ -101,17 +133,22 @@ public class SubscriptionState {
      * @param type The given subscription type
      */
     private void setSubscriptionType(SubscriptionType type) {
+        // 如果是 None，则可以指定其他模式
         if (this.subscriptionType == SubscriptionType.NONE)
             this.subscriptionType = type;
-        else if (this.subscriptionType != type)
+        else if (this.subscriptionType != type) // 如果已经指定了其他模式，则会报错
             throw new IllegalStateException(SUBSCRIPTION_EXCEPTION_MESSAGE);
     }
 
     public void subscribe(Set<String> topics, ConsumerRebalanceListener listener) {
+        /*
+         * 用户未指定 ConsumerRebalanceListener 时，默认使用 NoOpConsumerRebalanceListener
+         * 其中所有方法的实现都是空的
+         */
         if (listener == null)
             throw new IllegalArgumentException("RebalanceListener cannot be null");
 
-        setSubscriptionType(SubscriptionType.AUTO_TOPICS);
+        setSubscriptionType(SubscriptionType.AUTO_TOPICS); // 选择 AUTO_TOPICS 模式
 
         this.listener = listener;
 
@@ -127,6 +164,7 @@ public class SubscriptionState {
     }
 
     private void changeSubscription(Set<String> topicsToSubscribe) {
+        // 订阅的 Topic 有变化
         if (!this.subscription.equals(topicsToSubscribe)) {
             this.subscription = topicsToSubscribe;
             this.groupSubscription.addAll(topicsToSubscribe);
@@ -393,6 +431,7 @@ public class SubscriptionState {
         return listener;
     }
 
+    // 表示的是 TopicPartition 的消费状态
     private static class TopicPartitionState {
         private Long position; // last consumed position
         private OffsetAndMetadata committed;  // last committed position

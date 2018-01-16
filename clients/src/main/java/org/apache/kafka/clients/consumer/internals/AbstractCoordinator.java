@@ -98,18 +98,28 @@ public abstract class AbstractCoordinator implements Closeable {
     private final int rebalanceTimeoutMs;
     private final int sessionTimeoutMs;
     private final GroupCoordinatorMetrics sensors;
+    /*
+     * 心跳任务的辅助类，其中记录了心跳信息
+     */
     private final Heartbeat heartbeat;
+    // 消费者所属的 Consumer Group id
     protected final String groupId;
+    // 负责网络通信和执行线程任务
     protected final ConsumerNetworkClient client;
     protected final Time time;
     protected final long retryBackoffMs;
 
+    // 负责发送心跳请求和心跳响应的处理
     private HeartbeatThread heartbeatThread = null;
+    // 此字段是是否重新发送 JoinGroupRequest 请求的条件之一
     private boolean rejoinNeeded = true;
+    // 标记是否需要执行发送 JoinGroupRequest 请求前的准备操作
     private boolean needsJoinPrepare = true;
     private MemberState state = MemberState.UNJOINED;
     private RequestFuture<ByteBuffer> joinFuture = null;
+    // 记录服务端 GroupCoordinator 所在的 Node 节点
     private Node coordinator = null;
+    // 服务端 GroupCoordinator 返回的年代信息，用来区分两次 Rebalance 操作
     private Generation generation = Generation.NO_GENERATION;
 
     private RequestFuture<Void> findCoordinatorFuture = null;
