@@ -68,8 +68,11 @@ public interface PartitionAssignor {
      */
     String name();
 
+    // 用户订阅信息和一些影响分配的用户自定义信息封装
     class Subscription {
+        // 某 Member 订阅的 Topic 集合
         private final List<String> topics;
+        // 用户自定义的数据
         private final ByteBuffer userData;
 
         public Subscription(List<String> topics, ByteBuffer userData) {

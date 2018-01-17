@@ -699,6 +699,7 @@ public abstract class AbstractCoordinator implements Closeable {
         @Override
         public void handle(HeartbeatResponse heartbeatResponse, RequestFuture<Void> future) {
             sensors.heartbeatLatency.record(response.requestLatencyMs());
+            // 解析错误码
             Errors error = Errors.forCode(heartbeatResponse.errorCode());
             if (error == Errors.NONE) {
                 log.debug("Received successful heartbeat response for group {}", groupId);
