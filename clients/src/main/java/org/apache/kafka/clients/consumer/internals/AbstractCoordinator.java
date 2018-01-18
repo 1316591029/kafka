@@ -198,19 +198,19 @@ public abstract class AbstractCoordinator implements Closeable {
      * Block until the coordinator for this group is known and is ready to receive requests.
      */
     public synchronized void ensureCoordinatorReady() {
-        while (coordinatorUnknown()) {
-            RequestFuture<Void> future = lookupCoordinator();
-            client.poll(future);
+        while (coordinatorUnknown()) { // 1. 检测是否需要重新查找 GroupCoordinator
+            RequestFuture<Void> future = lookupCoordinator(); // 2. 创建并缓存请求
+            client.poll(future); // 3. 阻塞发送 GroupCoordinatorRequest，并处理 GroupCoordinatorResponse
 
-            if (future.failed()) {
+            if (future.failed()) { // 4. 异常处理
                 if (future.isRetriable())
-                    client.awaitMetadataUpdate();
+                    client.awaitMetadataUpdate(); // 阻塞更新 Metadata 中记录的集群元数据
                 else
                     throw future.exception();
             } else if (coordinator != null && client.connectionFailed(coordinator)) {
                 // we found the coordinator, but the connection has failed, so mark
                 // it dead and backoff before retrying discovery
-                coordinatorDead();
+                coordinatorDead(); // 5. 连接不到 GroupCoordinator，退避一段时间，重试
                 time.sleep(retryBackoffMs);
             }
         }
@@ -219,8 +219,11 @@ public abstract class AbstractCoordinator implements Closeable {
     protected synchronized RequestFuture<Void> lookupCoordinator() {
         if (findCoordinatorFuture == null) {
             // find a node to ask about the coordinator
+            /*
+             * 查找负载最低的节点，底层实现是查找 InFlightRequests 中未确认请求最少的节点
+             */
             Node node = this.client.leastLoadedNode();
-            if (node == null) {
+            if (node == null) { // 找不到可用节点，直接异常结束
                 // TODO: If there are no brokers left, perhaps we should use the bootstrap set
                 // from configuration?
                 return RequestFuture.noBrokersAvailable();
@@ -539,7 +542,9 @@ public abstract class AbstractCoordinator implements Closeable {
     private RequestFuture<Void> sendGroupCoordinatorRequest(Node node) {
         // initiate the group metadata request
         log.debug("Sending coordinator request for group {} to broker {}", groupId, node);
+        // 创建 GroupCoordinatorRequest 请求
         GroupCoordinatorRequest metadataRequest = new GroupCoordinatorRequest(this.groupId);
+        // 将 GroupCoordinatorRequest 缓存到 unsent 集合，ConsumerNetworkClient.send() 方法有介绍
         return client.send(node, ApiKeys.GROUP_COORDINATOR, metadataRequest)
                      .compose(new GroupCoordinatorResponseHandler());
     }
@@ -550,6 +555,7 @@ public abstract class AbstractCoordinator implements Closeable {
         public void onSuccess(ClientResponse resp, RequestFuture<Void> future) {
             log.debug("Received group coordinator response {}", resp);
 
+            // 解析 GroupCoordinatorResponse
             GroupCoordinatorResponse groupCoordinatorResponse = new GroupCoordinatorResponse(resp.responseBody());
             // use MAX_VALUE - node.id as the coordinator id to mimic separate connections
             // for the coordinator in the underlying network client layer
@@ -558,19 +564,23 @@ public abstract class AbstractCoordinator implements Closeable {
             clearFindCoordinatorFuture();
             if (error == Errors.NONE) {
                 synchronized (AbstractCoordinator.this) {
+                    // 创建 GroupCoordinator 对应的 Node 对象
                     AbstractCoordinator.this.coordinator = new Node(
                             Integer.MAX_VALUE - groupCoordinatorResponse.node().id(),
                             groupCoordinatorResponse.node().host(),
                             groupCoordinatorResponse.node().port());
                     log.info("Discovered coordinator {} for group {}.", coordinator, groupId);
-                    client.tryConnect(coordinator);
+                    client.tryConnect(coordinator); // 尝试连接 GroupCoordinator
+                    // 准备启动 HeartbeatThread
                     heartbeat.resetTimeouts(time.milliseconds());
                 }
+                // 将正常收到的 GroupCoordinatorResponse 事件传播出去
                 future.complete(null);
             } else if (error == Errors.GROUP_AUTHORIZATION_FAILED) {
                 future.raise(new GroupAuthorizationException(groupId));
             } else {
                 log.debug("Group coordinator lookup for group {} failed: {}", groupId, error.message());
+                // 将异常传播出去
                 future.raise(error);
             }
         }
