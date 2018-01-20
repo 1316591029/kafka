@@ -274,6 +274,7 @@ public class ConsumerNetworkClient implements Closeable {
         }
 
         // called without the lock to avoid deadlock potential if handlers need to acquire locks
+        // 这儿就是所有 RequestFuture.complete() 的地方
         firePendingCompletedRequests();
     }
 

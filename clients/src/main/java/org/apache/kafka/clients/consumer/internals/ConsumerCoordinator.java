@@ -215,22 +215,28 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         if (!isLeader)
             assignmentSnapshot = null;
 
+        // 查找 PartitionAssignor (分区分配策略)
         PartitionAssignor assignor = lookupAssignor(assignmentStrategy);
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
 
+        // 反序列化，更新 assignment
         Assignment assignment = ConsumerProtocol.deserializeAssignment(assignmentBuffer);
 
         // set the flag to refresh last committed offsets
+        // 允许从服务端获取最近一次提交的 offset
         subscriptions.needRefreshCommits();
 
         // update partition assignment
+        // 填充 assignment 集合
         subscriptions.assignFromSubscribed(assignment.partitions());
 
         // give the assignor a chance to update internal state based on the received assignment
+        // 回调函数
         assignor.onAssignment(assignment);
 
         // reschedule the auto commit starting from now
+        // 启动 AutoCommit
         this.nextAutoCommitDeadline = time.milliseconds() + autoCommitIntervalMs;
 
         // execute the user's callback after rebalance
@@ -238,6 +244,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         log.info("Setting newly assigned partitions {} for group {}", subscriptions.assignedPartitions(), groupId);
         try {
             Set<TopicPartition> assigned = new HashSet<>(subscriptions.assignedPartitions());
+            // 回调 ConsumerRebalanceListener
             listener.onPartitionsAssigned(assigned);
         } catch (WakeupException e) {
             throw e;
@@ -296,10 +303,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     protected Map<String, ByteBuffer> performAssignment(String leaderId,
                                                         String assignmentStrategy,
                                                         Map<String, ByteBuffer> allSubscriptions) {
+        // 查找分区策略
         PartitionAssignor assignor = lookupAssignor(assignmentStrategy);
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
 
+        // 反序列化操作及汇总操作
         Set<String> allSubscribedTopics = new HashSet<>();
         Map<String, Subscription> subscriptions = new HashMap<>();
         for (Map.Entry<String, ByteBuffer> subscriptionEntry : allSubscriptions.entrySet()) {
@@ -310,23 +319,28 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
+        // 对于 leader 需要关注 Consumer Group 中全部消费者订阅的 Topic
         this.subscriptions.groupSubscribe(allSubscribedTopics);
         metadata.setTopics(this.subscriptions.groupSubscription());
 
         // update metadata (if needed) and keep track of the metadata used for assignment so that
         // we can check after rebalance completion whether anything has changed
+        // 更新 Metadata
         client.ensureFreshMetadata();
 
         isLeader = true;
+        // 记录快照
         assignmentSnapshot = metadataSnapshot;
 
         log.debug("Performing assignment for group {} using strategy {} with subscriptions {}",
                 groupId, assignor.name(), subscriptions);
 
+        // 进分区分配
         Map<String, Assignment> assignment = assignor.assign(metadata.fetch(), subscriptions);
 
         log.debug("Finished assignment for group {}: {}", groupId, assignment);
 
+        // 保存分区分配结果序列号并存入 groupAssignment 中
         Map<String, ByteBuffer> groupAssignment = new HashMap<>();
         for (Map.Entry<String, Assignment> assignmentEntry : assignment.entrySet()) {
             ByteBuffer buffer = ConsumerProtocol.serializeAssignment(assignmentEntry.getValue());
@@ -339,9 +353,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     @Override
     protected void onJoinPrepare(int generation, String memberId) {
         // commit offsets prior to rebalance if auto-commit enabled
+        // 进行一次同步提交 offset 操作
         maybeAutoCommitOffsetsSync();
 
         // execute the user's callback before rebalance
+        // 注册 SubscriptionState 中的 ConsumerRebalanceListener 上的回调方法
         ConsumerRebalanceListener listener = subscriptions.listener();
         log.info("Revoking previously assigned partitions {} for group {}", subscriptions.assignedPartitions(), groupId);
         try {
@@ -354,6 +370,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                     listener.getClass().getName(), groupId, e);
         }
 
+        // 表示需要重新分区
         isLeader = false;
         subscriptions.resetGroupSubscription();
     }
