@@ -93,6 +93,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     private MetadataSnapshot metadataSnapshot;
     // 用来存储 Metadata 的快照信息，检测 Partition 分配过程中有没有发生分区数量的变化
     private MetadataSnapshot assignmentSnapshot;
+    // 支持 AutoCommit 具体计算在 maybeAutoCommitOffsetAsync
     private long nextAutoCommitDeadline;
 
     /**
@@ -276,11 +277,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             if (subscriptions.hasPatternSubscription())
                 client.ensureFreshMetadata();
 
-            ensureActiveGroup();
+            ensureActiveGroup(); // 保证心跳启动
             now = time.milliseconds();
         }
 
-        pollHeartbeat(now);
+        pollHeartbeat(now); // 触发一次心跳
         maybeAutoCommitOffsetsAsync(now);
     }
 
@@ -395,14 +396,17 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * Refresh the committed offsets for provided partitions.
      */
     public void refreshCommittedOffsetsIfNeeded() {
-        if (subscriptions.refreshCommitsNeeded()) {
+        if (subscriptions.refreshCommitsNeeded()) { // 检查 needsFetchCommittedOffsets
+            // 发送 OffsetFetchRequests 并处理 OffsetFetchResponse 响应。返回值是最近提交的 offset 集合
             Map<TopicPartition, OffsetAndMetadata> offsets = fetchCommittedOffsets(subscriptions.assignedPartitions());
+            // 处理 offsets 集合，更新对应的 TopicPartitionState 的 committed 字段中
             for (Map.Entry<TopicPartition, OffsetAndMetadata> entry : offsets.entrySet()) {
                 TopicPartition tp = entry.getKey();
                 // verify assignment is still active
                 if (subscriptions.isAssigned(tp))
                     this.subscriptions.committed(tp, entry.getValue());
             }
+            // 将 needsFetchCommittedOffsets 设置为 false，OffsetFetchRequest 处理结束
             this.subscriptions.commitsRefreshed();
         }
     }
@@ -414,15 +418,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      */
     public Map<TopicPartition, OffsetAndMetadata> fetchCommittedOffsets(Set<TopicPartition> partitions) {
         while (true) {
+            // 检测 GroupCoordinator 的状态
             ensureCoordinatorReady();
 
             // contact coordinator to fetch committed offsets
+            // 创建并缓存 OffsetFetchRequest 请求
             RequestFuture<Map<TopicPartition, OffsetAndMetadata>> future = sendOffsetFetchRequest(partitions);
-            client.poll(future);
+            client.poll(future); // 阻塞发送 OffsetFetchRequest 请求
 
             if (future.succeeded())
                 return future.value();
 
+            // 如果是 RetriableException 异常，则退避一段时间，重试
             if (!future.isRetriable())
                 throw future.exception();
 
@@ -480,12 +487,15 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // ensure the commit has a chance to be transmitted (without blocking on its completion).
         // Note that commits are treated as heartbeats by the coordinator, so there is no need to
         // explicitly allow heartbeats through delayed task execution.
-        client.pollNoWakeup();
+        client.pollNoWakeup(); // 将 OffsetCommitRequest 发送出去
     }
 
     private void doCommitOffsetsAsync(final Map<TopicPartition, OffsetAndMetadata> offsets, final OffsetCommitCallback callback) {
+        // 表示需要从 GroupCoordinator 获取最近提交的 offset
         this.subscriptions.needRefreshCommits();
+        // 这里与 send JoinGroupRequest 同理，需要关注的是回调函数的 handle
         RequestFuture<Void> future = sendOffsetCommitRequest(offsets);
+        // 选择回调函数
         final OffsetCommitCallback cb = callback == null ? defaultOffsetCommitCallback : callback;
         future.addListener(new RequestFutureListener<Void>() {
             @Override
@@ -546,7 +556,9 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             if (coordinatorUnknown()) {
                 this.nextAutoCommitDeadline = now + retryBackoffMs;
             } else if (now >= nextAutoCommitDeadline) {
+                // 计算下次 auto commit 的时间
                 this.nextAutoCommitDeadline = now + autoCommitIntervalMs;
+                // 启动 autoCommit
                 doAutoCommitOffsetsAsync();
             }
         }
@@ -564,6 +576,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 if (exception != null) {
                     log.warn("Auto offset commit failed for group {}: {}", groupId, exception.getMessage());
                     if (exception instanceof RetriableException)
+                        // 计算下一次 auto commit 时间
                         nextAutoCommitDeadline = Math.min(time.milliseconds() + retryBackoffMs, nextAutoCommitDeadline);
                 } else {
                     log.debug("Completed autocommit of offsets {} for group {}", offsets, groupId);
@@ -660,6 +673,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             sensors.commitLatency.record(response.requestLatencyMs());
             Set<String> unauthorizedTopics = new HashSet<>();
 
+            // 遍历待提交的所有 offset 信息
             for (Map.Entry<TopicPartition, Short> entry : commitResponse.responseData().entrySet()) {
                 TopicPartition tp = entry.getKey();
                 OffsetAndMetadata offsetAndMetadata = this.offsets.get(tp);
@@ -670,6 +684,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                     log.debug("Group {} committed offset {} for partition {}", groupId, offset, tp);
                     if (subscriptions.isAssigned(tp))
                         // update the local cache only if the partition is still assigned
+                        // 更新 SubscriptionState 中对应 TopicPartitionState 的 committed 字段
                         subscriptions.committed(tp, offsetAndMetadata);
                 } else if (error == Errors.GROUP_AUTHORIZATION_FAILED) {
                     log.error("Not authorized to commit offsets for group {}", groupId);
