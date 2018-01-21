@@ -77,22 +77,35 @@ public class Fetcher<K, V> {
 
     private static final Logger log = LoggerFactory.getLogger(Fetcher.class);
 
+    // 负责网络通信
     private final ConsumerNetworkClient client;
     private final Time time;
+    /*
+     * 在服务端收到 FetchRequest 之后并不是立即响应，而是当可返回的消息数据
+     * 积累到至少 minBytes 个字节才进行响应。这样每个 FetchResponse 中就包含
+     * 多条消息，提高网络的有效负载
+     */
     private final int minBytes;
     private final int maxBytes;
+    // 等待 FetchResponse 的最长时间，服务端根据此时间决定何时进行响应
     private final int maxWaitMs;
+    // 每次 fetch 操作的最大字节数
     private final int fetchSize;
     private final long retryBackoffMs;
+    // 每次获取 Record 的最大数量
     private final int maxPollRecords;
     private final boolean checkCrcs;
     private final Metadata metadata;
     private final FetchManagerMetrics sensors;
     private final SubscriptionState subscriptions;
+    // 每个 FetchResponse 首先会转换成 CompletedFetch 对象进行次队列缓存，此时并未解析消息
     private final ConcurrentLinkedQueue<CompletedFetch> completedFetches;
     private final Deserializer<K> keyDeserializer;
     private final Deserializer<V> valueDeserializer;
 
+    // PartitionRecords 保存了 CompleteFetch 解析后的结果集合，其中有
+    // 三个字段：records 是消息集合，fetchOffset 记录了 records 中
+    // 第一个消息的 offset，partition 记录了消息对应的 TopicPartition
     private PartitionRecords<K, V> nextInLineRecords = null;
 
     public Fetcher(ConsumerNetworkClient client,
@@ -150,7 +163,9 @@ public class Fetcher<K, V> {
             final FetchRequest request = fetchEntry.getValue();
             final Node fetchTarget = fetchEntry.getKey();
 
+            //  将发往每个 Node 的 FetchRequest 都缓存到 unsent 队列上
             client.send(fetchTarget, ApiKeys.FETCH, request)
+                    // 添加 Listener，这也是处理 FetchResponse 的入口
                     .addListener(new RequestFutureListener<ClientResponse>() {
                         @Override
                         public void onSuccess(ClientResponse resp) {
@@ -167,10 +182,12 @@ public class Fetcher<K, V> {
                             Set<TopicPartition> partitions = new HashSet<>(response.responseData().keySet());
                             FetchResponseMetricAggregator metricAggregator = new FetchResponseMetricAggregator(sensors, partitions);
 
+                            // 遍历响应中的数据
                             for (Map.Entry<TopicPartition, FetchResponse.PartitionData> entry : response.responseData().entrySet()) {
                                 TopicPartition partition = entry.getKey();
                                 long fetchOffset = request.fetchData().get(partition).offset;
                                 FetchResponse.PartitionData fetchData = entry.getValue();
+                                // 创建 CompleteFetch，并缓存到 completedFetches 队列中
                                 completedFetches.add(new CompletedFetch(partition, fetchOffset, fetchData, metricAggregator));
                             }
 
@@ -207,15 +224,17 @@ public class Fetcher<K, V> {
         // reset the fetch position to the committed position
         for (TopicPartition tp : partitions) {
             if (!subscriptions.isAssigned(tp) || subscriptions.hasValidPosition(tp))
-                continue;
+                continue; // 检测 position 是否为空，如果非空则表示正常，不需要重置操作
 
             if (subscriptions.isOffsetResetNeeded(tp)) {
-                resetOffset(tp);
+                resetOffset(tp); // 按照指定的策略对 position 进行更新
             } else if (subscriptions.committed(tp) == null) {
                 // there's no committed position, so we need to reset with the default strategy
+                // 对应的 TopicPartitionState.committed 字段为空，则按照 default strategy 策略更新 position 的值
                 subscriptions.needOffsetReset(tp);
                 resetOffset(tp);
             } else {
+                // 如果对应的 TopicPartitionState.committed 字段不为空，则将 position 字段更新为 committed 字段值
                 long committed = subscriptions.committed(tp).offset();
                 log.debug("Resetting offset for partition {} to the committed offset {}", tp, committed);
                 subscriptions.seek(tp, committed);
@@ -329,7 +348,7 @@ public class Fetcher<K, V> {
      */
     private void resetOffset(TopicPartition partition) {
         OffsetResetStrategy strategy = subscriptions.resetStrategy(partition);
-        final long timestamp;
+        final long timestamp; // 根据配置的重置策略选择 timestamp
         if (strategy == OffsetResetStrategy.EARLIEST)
             timestamp = ListOffsetRequest.EARLIEST_TIMESTAMP;
         else if (strategy == OffsetResetStrategy.LATEST)
@@ -338,11 +357,14 @@ public class Fetcher<K, V> {
             throw new NoOffsetForPartitionException(partition);
 
         log.debug("Resetting offset for partition {} to {} offset.", partition, strategy.name().toLowerCase(Locale.ROOT));
+        /*
+         * 向分区的 Leader 副本所在的 Node 发送一个 OffsetsRequest 请求，并阻塞等待其响应处理 OffsetsResponse 后返回 offset
+         */
         long offset = getOffsetsByTimes(Collections.singletonMap(partition, timestamp), Long.MAX_VALUE).get(partition).offset();
 
         // we might lose the assignment while fetching the offset, so check it is still active
         if (subscriptions.isAssigned(partition))
-            this.subscriptions.seek(partition, offset);
+            this.subscriptions.seek(partition, offset); // 更新 position
     }
 
     public Map<TopicPartition, OffsetAndTimestamp> getOffsetsByTimes(Map<TopicPartition, Long> timestampsToSearch,
@@ -413,22 +435,27 @@ public class Fetcher<K, V> {
      */
     public Map<TopicPartition, List<ConsumerRecord<K, V>>> fetchedRecords() {
         Map<TopicPartition, List<ConsumerRecord<K, V>>> drained = new HashMap<>();
+        // 一次最多取出 maxPollRecords 条消息
         int recordsRemaining = maxPollRecords;
 
+        // 遍历 completedFetches 集合
         while (recordsRemaining > 0) {
             if (nextInLineRecords == null || nextInLineRecords.isDrained()) {
                 CompletedFetch completedFetch = completedFetches.poll();
                 if (completedFetch == null)
                     break;
 
+                // 解析 CompletedFetch，得到一个 PartitionRecords 对象
                 nextInLineRecords = parseFetchedData(completedFetch);
             } else {
                 TopicPartition partition = nextInLineRecords.partition;
 
+                // 这里是获取 nextInLineRecords 的信息
                 List<ConsumerRecord<K, V>> records = drainRecords(nextInLineRecords, recordsRemaining);
                 if (!records.isEmpty()) {
                     List<ConsumerRecord<K, V>> currentRecords = drained.get(partition);
                     if (currentRecords == null) {
+                        // 将 nextInLineRecord 的信息添加到 drained 中
                         drained.put(partition, records);
                     } else {
                         // this case shouldn't usually happen because we only send one fetch at a time per partition,
@@ -460,7 +487,7 @@ public class Fetcher<K, V> {
             if (!subscriptions.isFetchable(partitionRecords.partition)) {
                 // this can happen when a partition is paused before fetched records are returned to the consumer's poll call
                 log.debug("Not returning fetched records for assigned partition {} since it is no longer fetchable", partitionRecords.partition);
-            } else if (partitionRecords.fetchOffset == position) {
+            } else if (partitionRecords.fetchOffset == position) { // 正常走位
                 // we are ensured to have at least one record since we already checked for emptiness
                 List<ConsumerRecord<K, V>> partRecords = partitionRecords.drainRecords(maxRecords);
                 long nextOffset = partRecords.get(partRecords.size() - 1).offset() + 1;
@@ -618,15 +645,16 @@ public class Fetcher<K, V> {
      * Create fetch requests for all nodes for which we have assigned partitions
      * that have no existing requests in flight.
      */
-    private Map<Node, FetchRequest> createFetchRequests() {
+    private Map<Node, FetchRequest /* 发送对应 Node 的 FetchRequest 集合*/ > createFetchRequests() {
         // create the fetch info
-        Cluster cluster = metadata.fetch();
+        Cluster cluster = metadata.fetch(); // 获取 Kafka 集群信息
         Map<Node, LinkedHashMap<TopicPartition, FetchRequest.PartitionData>> fetchable = new LinkedHashMap<>();
         for (TopicPartition partition : fetchablePartitions()) {
+            // 查找分区的 Leader 副本所在的 Node，只有分区的 Leader 副本才能处理读写请求
             Node node = cluster.leaderFor(partition);
             if (node == null) {
-                metadata.requestUpdate();
-            } else if (this.client.pendingRequestCount(node) == 0) {
+                metadata.requestUpdate(); // 找不到 Leader 副本则准备更新 Metadata
+            } else if (this.client.pendingRequestCount(node) == 0) { // 是否还有 pending 请求
                 // if there is a leader and no in-flight requests, issue a new fetch
                 LinkedHashMap<TopicPartition, FetchRequest.PartitionData> fetch = fetchable.get(node);
                 if (fetch == null) {
@@ -635,6 +663,7 @@ public class Fetcher<K, V> {
                 }
 
                 long position = this.subscriptions.position(partition);
+                // 记录每个分区的对应的 postition，即要 fetch 的消息的 offset
                 fetch.put(partition, new FetchRequest.PartitionData(position, this.fetchSize));
                 log.trace("Added fetch request for partition {} at offset {}", partition, position);
             } else {
@@ -643,6 +672,10 @@ public class Fetcher<K, V> {
         }
 
         // create the fetches
+        /*
+         * 对上面的 fetchable 集合进行转换，将发往一个 Node 节点的所有 TopicPartition 的
+         * posititon 信息封装成一个 FetchRequest 对象
+         */
         Map<Node, FetchRequest> requests = new HashMap<>();
         for (Map.Entry<Node, LinkedHashMap<TopicPartition, FetchRequest.PartitionData>> entry : fetchable.entrySet()) {
             Node node = entry.getKey();
@@ -678,12 +711,14 @@ public class Fetcher<K, V> {
                             "the expected offset {}", tp, fetchOffset, position);
                     return null;
                 }
-
                 ByteBuffer buffer = partition.recordSet;
+                // 创建 MemoryRecords
                 MemoryRecords records = MemoryRecords.readableRecords(buffer);
                 List<ConsumerRecord<K, V>> parsed = new ArrayList<>();
+                // 遍历 MemoryRecords 获取 Record 集合
                 for (LogEntry logEntry : records) {
                     // Skip the messages earlier than current position.
+                    // 跳过早于 position 的消息
                     if (logEntry.offset() >= position) {
                         parsed.add(parseRecord(tp, logEntry));
                         bytes += logEntry.size();
@@ -695,6 +730,7 @@ public class Fetcher<K, V> {
 
                 if (!parsed.isEmpty()) {
                     log.trace("Adding fetched record for partition {} with offset {} to buffered record list", tp, position);
+                    // 解析之后的 Record 封装成 PartitionRecords
                     parsedRecords = new PartitionRecords<>(fetchOffset, tp, parsed);
                     ConsumerRecord<K, V> record = parsed.get(parsed.size() - 1);
                     this.sensors.recordsFetchLag.record(partition.highWatermark - record.offset());

@@ -981,7 +981,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     @Override
     public ConsumerRecords<K, V> poll(long timeout) {
-        acquire();
+        acquire(); // 防止多线程操作
         try {
             if (timeout < 0)
                 throw new IllegalArgumentException("Timeout must not be negative");
@@ -993,20 +993,31 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             long start = time.milliseconds();
             long remaining = timeout;
             do {
+                // pollOnce 方法是核心方法，注意其超时时间
                 Map<TopicPartition, List<ConsumerRecord<K, V>>> records = pollOnce(remaining);
-                if (!records.isEmpty()) {
+                if (!records.isEmpty()) { // 检查是否有消息返回
                     // before returning the fetched records, we can send off the next round of fetches
                     // and avoid block waiting for their responses to enable pipelining while the user
                     // is handling the fetched records.
                     //
                     // NOTE: since the consumed position has already been updated, we must not allow
                     // wakeups or any other errors to be triggered prior to returning the fetched records.
-                    fetcher.sendFetches();
+                    /*
+                     * 为了提升效率，在对 records 集合进行处理之前，先发送一次 FetchRequest。
+                     * 这样，线程处理完本次 records 集合的操作，与 FetchRequest 及其响应在网络
+                     * 上传输以及在服务端的处理就变成并行的了，这样就可以减少等待网络 I/O 的时间
+                     */
+                    fetcher.sendFetches(); // 创建并缓存 FetchRequest
+                    /*
+                     * 调用 ConsumerNetworkClient.pollNoWakeup() 方法将 FetchRequest 发送出去。
+                     * 注意，此处的 pollNoWakeup() 方法并不会阻塞，不能被中断，也不会执行定时任务（线程）
+                     */
                     client.pollNoWakeup();
 
                     if (this.interceptors == null)
                         return new ConsumerRecords<>(records);
                     else
+                        // 调用 ConsumerInterceptors
                         return this.interceptors.onConsume(new ConsumerRecords<>(records));
                 }
 
@@ -1035,16 +1046,20 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             updateFetchPositions(this.subscriptions.missingFetchPositions());
 
         // if data is available already, return it immediately
+        // 尝试从 completedFetches 缓存中解析消息
         Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
+        // 判断缓存中是否有消息
         if (!records.isEmpty())
             return records;
 
         // send any new fetches (won't resend pending fetches)
+        // 创建并缓存 FetchRequest 请求
         fetcher.sendFetches();
 
         long now = time.milliseconds();
         long pollTimeout = Math.min(coordinator.timeToNextPoll(now), timeout);
 
+        // 发送 FetchRequest
         client.poll(pollTimeout, now, new PollCondition() {
             @Override
             public boolean shouldBlock() {
@@ -1059,6 +1074,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         if (coordinator.needRejoin())
             return Collections.emptyMap();
 
+        // 从 completedFetches 缓存中解析消息
         return fetcher.fetchedRecords();
     }
 
