@@ -51,20 +51,43 @@ import scala.util.control.{ControlThrowable, NonFatal}
  */
 class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time) extends Logging with KafkaMetricsGroup {
 
+  /*
+   * Endpoint 集合。一般的服务器都有多块网卡，可以配置多个 IP，Kafka 可以同时监听多个端口。
+   * Endpoint 类中封装了需要监听的 host、port 及使用的网络协议。每个 Endpoint 都会创建一个
+   * 对应的 Acceptor 对象
+   */
   private val endpoints = config.listeners
+  // Processor 线程个数
   private val numProcessorThreads = config.numNetworkThreads
+  //  在 RequestChannel 的 requestQueue 中缓存的最大请求个数
   private val maxQueuedRequests = config.queuedMaxRequests
+  // Processor 线程的总个数，即 numProcessorThread * endpoints.size
   private val totalProcessorThreads = numProcessorThreads * endpoints.size
 
+  // 每个 IP 上能创建的最大连接数
   private val maxConnectionsPerIp = config.maxConnectionsPerIp
+  // Map[String, Int] 类型，具体制定某 IP 上最大的连接数，这里制定的最大连接数会覆盖上面的 maxConnectionsPerIp 字段的值
   private val maxConnectionsPerIpOverrides = config.maxConnectionsPerIpOverrides
 
   this.logIdent = "[Socket Server on Broker " + config.brokerId + "], "
 
+  // Processor 线程与 Handler 线程之间交互数据的队列
+  // 创建 RequestChannel，其中有 totalProcessorThreads 个 responseQueue 队列
   val requestChannel = new RequestChannel(totalProcessorThreads, maxQueuedRequests)
+
+  // Processor 线程的集合。此集合中包含所有 Endpoint 对应的 Processors 线程
+  // 创建保存 Processor 的数组
   private val processors = new Array[Processor](totalProcessorThreads)
 
+  // 创建保存 Acceptor 的集合
   private[network] val acceptors = mutable.Map[EndPoint, Acceptor]()
+  /*
+   * ConnectionQuotas 类型的对象。在 ConnectionQuotas 中，提供了控制每个 IP 上的
+   * 最大连接数的功能。底层通过一个 Map 对象，记录每个 IP 地址上建立的连接数，创建
+   * 新 Connect 时与 maxConnectionsPerIpOverrides 指定的最大值（或 maxConnectionsPerIp）
+   * 进行笔记，若超出限制，则报错。因为有多个 Acceptor 线程并发访问底层的 Map 对象，则
+   * 需要 synchronized 进行同步
+   */
   private var connectionQuotas: ConnectionQuotas = _
 
   private val allMetricNames = (0 until totalProcessorThreads).map { i =>
@@ -75,30 +98,42 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
 
   /**
    * Start the socket server
+   * 初始化核心方法
    */
   def startup() {
-    this.synchronized {
+    this.synchronized { // 同步
 
+      // 创建 ConnectionQuotas
       connectionQuotas = new ConnectionQuotas(maxConnectionsPerIp, maxConnectionsPerIpOverrides)
 
+      // Socket 的 sendBuffer 大小
       val sendBufferSize = config.socketSendBufferBytes
+      // Socket 的 receiveBuffer 大小
       val recvBufferSize = config.socketReceiveBufferBytes
       val brokerId = config.brokerId
 
       var processorBeginIndex = 0
-      endpoints.values.foreach { endpoint =>
+
+      endpoints.values.foreach { endpoint => // 遍历 Endpoints 集合
         val protocol = endpoint.protocolType
         val processorEndIndex = processorBeginIndex + numProcessorThreads
 
+        // processors 数组从 processorBeginIndex~processorEndIndex，都是当前 Endpoint 对应的 Processor 对象的集合
         for (i <- processorBeginIndex until processorEndIndex)
+          // 创建 Processor
           processors(i) = newProcessor(i, connectionQuotas, protocol)
 
+        // 创建 Acceptor，同事为 processor 创建对应的线程
         val acceptor = new Acceptor(endpoint, sendBufferSize, recvBufferSize, brokerId,
-          processors.slice(processorBeginIndex, processorEndIndex), connectionQuotas)
+          processors.slice(processorBeginIndex, processorEndIndex) /*指定了 processors 数组重在此 Acceptor 对象对应的 Processor 对象*/,
+          connectionQuotas)
         acceptors.put(endpoint, acceptor)
+        // 创建 Acceptor 对应的线程，并启动
         Utils.newThread("kafka-socket-acceptor-%s-%d".format(protocol.toString, endpoint.port), acceptor, false).start()
+        // 主线程阻塞等待 Acceptor 线程启动完成
         acceptor.awaitStartup()
 
+        // 修改 processorBeginIndex，为下一个 Endpoint 准备
         processorBeginIndex = processorEndIndex
       }
     }
@@ -114,6 +149,10 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
   }
 
   // register the processor threads for notification of responses
+  /*
+   * 向 RequestChannel 中添加一个监听器。此监听器实现的功能是：当 Handler 线程向某个
+   * responseQueue 中写入数据时，会唤醒对应的 Processor 线程进行处理
+   */
   requestChannel.addResponseListener(id => processors(id).wakeup())
 
   /**
@@ -122,8 +161,8 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
   def shutdown() = {
     info("Shutting down")
     this.synchronized {
-      acceptors.values.foreach(_.shutdown)
-      processors.foreach(_.shutdown)
+      acceptors.values.foreach(_.shutdown) // 调用所有 Acceptor 的 shutdown
+      processors.foreach(_.shutdown) // 调用所有 Processor 的 shutdown
     }
     info("Shutdown completed")
   }
@@ -161,11 +200,17 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
 
 /**
  * A base class with some helper variables and methods
+ * @param connectionQuotas 在 close() 方法中，根据传入的 ConnectionId，关闭
+  *                         SocketChannel 并减少 ConnectionQuotas 中记录的
+  *                         连接数
  */
 private[kafka] abstract class AbstractServerThread(connectionQuotas: ConnectionQuotas) extends Runnable with Logging {
 
+  // count 为 1 的 CountDownLatch 对象，标识了当前线程的 startup 操作是否完成
   private val startupLatch = new CountDownLatch(1)
+  // count 为 1 的 CountDownLatch 对象，标识了当前线程的 shutdown 操作是否完成
   private val shutdownLatch = new CountDownLatch(1)
+  // 标识当前线程是否存活，在初始化时设置为 true，在 shutdown() 方法中会将 alive 设置为 false
   private val alive = new AtomicBoolean(true)
 
   def wakeup()
@@ -175,8 +220,8 @@ private[kafka] abstract class AbstractServerThread(connectionQuotas: ConnectionQ
    */
   def shutdown(): Unit = {
     alive.set(false)
-    wakeup()
-    shutdownLatch.await()
+    wakeup() // 幻想当前 AbstractServerThread
+    shutdownLatch.await() // 阻塞等待关闭操作完成
   }
 
   /**
@@ -203,6 +248,7 @@ private[kafka] abstract class AbstractServerThread(connectionQuotas: ConnectionQ
 
   /**
    * Close the connection identified by `connectionId` and decrement the connection count.
+   * 关闭指定连接
    */
   def close(selector: KSelector, connectionId: String) {
     val channel = selector.channel(connectionId)
@@ -210,8 +256,8 @@ private[kafka] abstract class AbstractServerThread(connectionQuotas: ConnectionQ
       debug(s"Closing selector connection $connectionId")
       val address = channel.socketAddress
       if (address != null)
-        connectionQuotas.dec(address)
-      selector.close(connectionId)
+        connectionQuotas.dec(address) // 修改连接数
+      selector.close(connectionId) // 关闭连接
     }
   }
 
