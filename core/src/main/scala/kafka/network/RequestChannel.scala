@@ -52,6 +52,7 @@ object RequestChannel extends Logging {
   case class Request(processor: Int, connectionId: String, session: Session, private var buffer: ByteBuffer, startTimeMs: Long, securityProtocol: SecurityProtocol) {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
     // handler threads or the purgatory threads
+    // 存在跨线程的比较和修改
     @volatile var requestDequeueTimeMs = -1L
     @volatile var apiLocalCompleteTimeMs = -1L
     @volatile var responseCompleteTimeMs = -1L
@@ -180,9 +181,16 @@ object RequestChannel extends Logging {
   case object CloseConnectionAction extends ResponseAction
 }
 
-class RequestChannel(val numProcessors: Int, val queueSize: Int) extends KafkaMetricsGroup {
+class RequestChannel(val numProcessors /* Processor线程数 & responseQueues 队列长 */: Int,
+                     val queueSize /* 缓存请求最大个数，即 requestQueue 长度 */: Int) extends KafkaMetricsGroup {
+  // 监听器列表，其中监听器的主要作用是 Handler 线程向 responseQueue 存放响应时唤醒对应的 Processor 线程
+  // 在 SocketServer 的初始化过程中，有向该集合中添加一个唤醒对应 Processor 线程的监听
+  // 需要注意的是，每次向 responseQueues 添加请求时都要触发 responseListener 列表中的监听器
   private var responseListeners: List[(Int) => Unit] = Nil
+  // Processor 线程向 Handler 线程传递请求的队列。
+  // 因为多个 Processor 线程和多个 Handler 线程并发操作，所以需要队列线程安全
   private val requestQueue = new ArrayBlockingQueue[RequestChannel.Request](queueSize)
+  // Handler 线程向 Processor 线程传递响应的队列，每个 Processor 对应该数组重的一个队列
   private val responseQueues = new Array[BlockingQueue[RequestChannel.Response]](numProcessors)
   for(i <- 0 until numProcessors)
     responseQueues(i) = new LinkedBlockingQueue[RequestChannel.Response]()
@@ -213,23 +221,24 @@ class RequestChannel(val numProcessors: Int, val queueSize: Int) extends KafkaMe
   }
 
   /** Send a response back to the socket server to be sent over the network */
+  // 向对应 responseQueue 队列中添加 SendAction 类型的 Response
   def sendResponse(response: RequestChannel.Response) {
     responseQueues(response.processor).put(response)
-    for(onResponse <- responseListeners)
+    for(onResponse <- responseListeners) // 调用 responseListeners
       onResponse(response.processor)
   }
 
   /** No operation to take for the request, need to read more over the network */
   def noOperation(processor: Int, request: RequestChannel.Request) {
     responseQueues(processor).put(new RequestChannel.Response(processor, request, null, RequestChannel.NoOpAction))
-    for(onResponse <- responseListeners)
+    for(onResponse <- responseListeners) // 调用 responseListeners
       onResponse(processor)
   }
 
   /** Close the connection for the request */
   def closeConnection(processor: Int, request: RequestChannel.Request) {
     responseQueues(processor).put(new RequestChannel.Response(processor, request, null, RequestChannel.CloseConnectionAction))
-    for(onResponse <- responseListeners)
+    for(onResponse <- responseListeners) // 调用 responseListeners
       onResponse(processor)
   }
 
