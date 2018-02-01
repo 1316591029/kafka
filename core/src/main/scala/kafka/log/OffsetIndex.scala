@@ -48,7 +48,7 @@ import kafka.common.InvalidOffsetException
  * All external APIs translate from relative offsets to full offsets, so users of this class do not interact with the internal 
  * storage format.
  */
-class OffsetIndex(file: File, baseOffset: Long, maxIndexSize: Int = -1)
+class OffsetIndex(file: File /* 指向磁盘上的索引文件 */, baseOffset: Long, maxIndexSize: Int = -1)
     extends AbstractIndex[Long, Int](file, baseOffset, maxIndexSize) {
 
   override def entrySize = 8
@@ -83,8 +83,9 @@ class OffsetIndex(file: File, baseOffset: Long, maxIndexSize: Int = -1)
    *         the pair (baseOffset, 0) is returned.
    */
   def lookup(targetOffset: Long): OffsetPosition = {
-    maybeLock(lock) {
-      val idx = mmap.duplicate
+    maybeLock(lock) { // windows 专属加锁
+      val idx = mmap.duplicate // 创建副本
+      // 二分查找具体实现
       val slot = indexSlotFor(idx, targetOffset, IndexSearchType.KEY)
       if(slot == -1)
         OffsetPosition(baseOffset, 0)

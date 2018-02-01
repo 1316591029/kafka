@@ -42,20 +42,24 @@ abstract class AbstractIndex[K, V](@volatile private[this] var _file: File, val 
 
   protected def entrySize: Int
 
+  // 在对 mmap 进行操作时，需要加锁保护
   protected val lock = new ReentrantLock
 
+  // 用来操作索引文件的 MappedByteBuffer
   @volatile
   protected var mmap: MappedByteBuffer = {
+    // 如果索引文件不存在，则创建新文件并返回 true，反之返回 false
     val newlyCreated = _file.createNewFile()
     val raf = new RandomAccessFile(_file, "rw")
     try {
       /* pre-allocate the file if necessary */
-      if(newlyCreated) {
+      if(newlyCreated) { // 对于新创建的索引文件，进行扩容
         if(maxIndexSize < entrySize)
           throw new IllegalArgumentException("Invalid max index size: " + maxIndexSize)
         raf.setLength(roundDownToExactMultiple(maxIndexSize, entrySize))
       }
 
+      // 进行内存映射
       /* memory-map the file */
       val len = raf.length()
       val idx = raf.getChannel.map(FileChannel.MapMode.READ_WRITE, 0, len)

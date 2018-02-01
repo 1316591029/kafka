@@ -37,14 +37,14 @@ object ByteBufferMessageSet {
                      wrapperMessageTimestamp: Option[Long],
                      timestampType: TimestampType,
                      messages: Message*): ByteBuffer = {
-    if (messages.isEmpty)
+    if (messages.isEmpty) // Message 为空
       MessageSet.Empty.buffer
-    else if (compressionCodec == NoCompressionCodec) {
+    else if (compressionCodec == NoCompressionCodec) { // 不需要压缩
       val buffer = ByteBuffer.allocate(MessageSet.messageSetSize(messages))
-      for (message <- messages) writeMessage(buffer, message, offsetAssigner.nextAbsoluteOffset())
+      for (message <- messages) writeMessage(buffer, message, offsetAssigner.nextAbsoluteOffset() /* 分配 offset */)
       buffer.rewind()
       buffer
-    } else {
+    } else { // 处理压缩情况
       val magicAndTimestamp = wrapperMessageTimestamp match {
         case Some(ts) => MagicAndTimestamp(messages.head.magic, ts)
         case None => MessageSet.magicAndLargestTimestamp(messages)
@@ -52,18 +52,21 @@ object ByteBufferMessageSet {
       var offset = -1L
       val messageWriter = new MessageWriter(math.min(math.max(MessageSet.messageSetSize(messages) / 2, 1024), 1 << 16))
       messageWriter.write(codec = compressionCodec, timestamp = magicAndTimestamp.timestamp, timestampType = timestampType, magicValue = magicAndTimestamp.magic) { outputStream =>
+        // 创建指定压缩类型的输出流
         val output = new DataOutputStream(CompressionFactory(compressionCodec, magicAndTimestamp.magic, outputStream))
         try {
-          for (message <- messages) {
+          for (message <- messages) { // 遍历写入内层压缩消息
             offset = offsetAssigner.nextAbsoluteOffset()
             if (message.magic != magicAndTimestamp.magic)
               throw new IllegalArgumentException("Messages in the message set must have same magic value")
             // Use inner offset if magic value is greater than 0
+            // Magic 值为 1，写入相对 offset；Magic 值为 0，写入 offset
             if (magicAndTimestamp.magic > Message.MagicValue_V0)
               output.writeLong(offsetAssigner.toInnerOffset(offset))
             else
               output.writeLong(offset)
             output.writeInt(message.size)
+            // 写入数据
             output.write(message.buffer.array, message.buffer.arrayOffset, message.buffer.limit)
           }
         } finally {
@@ -71,6 +74,7 @@ object ByteBufferMessageSet {
         }
       }
       val buffer = ByteBuffer.allocate(messageWriter.size + MessageSet.LogOverhead)
+      // 按照消息格式写入整个外层消息。注意，外层消息的 offset 是最后一条内层消息的 offset
       writeMessage(buffer, messageWriter, offset)
       buffer.rewind()
       buffer

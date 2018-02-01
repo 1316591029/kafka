@@ -73,11 +73,13 @@ abstract class MessageSet extends Iterable[MessageAndOffset] {
   /** Write the messages in this set to the given channel starting at the given offset byte. 
     * Less than the complete amount may be written, but no more than maxSize can be. The number
     * of bytes written is returned */
+  // 将当前 MessageSet 中的消息写入 Channel
   def writeTo(channel: GatheringByteChannel, offset: Long, maxSize: Int): Int
 
   /**
    * Check if all the wrapper messages in the message set have the expected magic value
    */
+  // 提供迭代器，顺序读取 MessageSet 中的消息
   def isMagicValueInAllWrapperMessages(expectedMagicValue: Byte): Boolean
 
   /**

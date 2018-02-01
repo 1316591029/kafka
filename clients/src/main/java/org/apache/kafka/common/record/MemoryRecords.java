@@ -231,21 +231,22 @@ public class MemoryRecords implements Records {
         private final long absoluteBaseOffset;
 
         public RecordsIterator(ByteBuffer buffer, boolean shallow) {
-            this.type = CompressionType.NONE;
-            this.buffer = buffer;
-            this.shallow = shallow;
-            this.stream = new DataInputStream(new ByteBufferInputStream(buffer));
+            this.type = CompressionType.NONE; // 外层消息是非压缩的
+            this.buffer = buffer; // 指向 MemoryRecords.buffer 字段
+            this.shallow = shallow; // 标识是否为深层迭代器
+            this.stream = new DataInputStream(new ByteBufferInputStream(buffer)); // 输入流
             this.logEntries = null;
             this.absoluteBaseOffset = -1;
         }
 
         // Private constructor for inner iterator.
         private RecordsIterator(LogEntry entry) {
-            this.type = entry.record().compressionType();
+            this.type = entry.record().compressionType(); // 指定内层压缩消息的压缩类型
             this.buffer = entry.record().value();
             this.shallow = true;
+            // 创建指定压缩类型的输入流
             this.stream = Compressor.wrapForInput(new ByteBufferInputStream(this.buffer), type, entry.record().magic());
-            long wrapperRecordOffset = entry.offset();
+            long wrapperRecordOffset = entry.offset(); // 外层消息的 offset
 
             long wrapperRecordTimestamp = entry.record().timestamp();
             this.logEntries = new ArrayDeque<>();
@@ -253,8 +254,10 @@ public class MemoryRecords implements Records {
             // the absolute offset. For simplicity and because it's a format that is on its way out, we
             // do the same for message format version 0
             try {
-                while (true) {
+                while (true) { // 这个循环中，将内层消息全部解压出来并添加到 logEntries 集合中
                     try {
+                        // 对于内层消息，getNextEntryFromStream() 方法是读取并解压缩消息
+                        // 对于外层消息或非压缩消息，则仅仅是读取消息
                         LogEntry logEntry = getNextEntryFromStream();
                         if (entry.record().magic() > Record.MAGIC_VALUE_V0) {
                             Record recordWithTimestamp = new Record(
@@ -264,6 +267,7 @@ public class MemoryRecords implements Records {
                             );
                             logEntry = new LogEntry(logEntry.offset(), recordWithTimestamp);
                         }
+                        // 添加到 logEntries 集合中
                         logEntries.add(logEntry);
                     } catch (EOFException e) {
                         break;
@@ -289,19 +293,21 @@ public class MemoryRecords implements Records {
          */
         @Override
         protected LogEntry makeNext() {
-            if (innerDone()) {
+            if (innerDone()) { // 检测当前深层迭代是否已经完成，或是深层迭代还未开始
                 try {
-                    LogEntry entry = getNextEntry();
+                    LogEntry entry = getNextEntry(); // 获取消息
                     // No more record to return.
-                    if (entry == null)
+                    if (entry == null) // 获取不到消息，调用 allDone() 方法结束迭代
                         return allDone();
 
                     // Convert offset to absolute offset if needed.
+                    // 在 Inner Iterator 中计算每个消息的 absoluteOffset
                     if (absoluteBaseOffset >= 0) {
                         long absoluteOffset = absoluteBaseOffset + entry.offset();
                         entry = new LogEntry(absoluteOffset, entry.record());
                     }
 
+                    // 根据压缩类型和 shallow 参数决定是否创建 Inner Iterator
                     // decide whether to go shallow or deep iteration if it is compressed
                     CompressionType compression = entry.record().compressionType();
                     if (compression == CompressionType.NONE || shallow) {
@@ -313,8 +319,9 @@ public class MemoryRecords implements Records {
                         // would not try to further decompress underlying messages
                         // There will be at least one element in the inner iterator, so we don't
                         // need to call hasNext() here.
+                        // 创建 Inner Iterator，每迭代一个外层消息，创建一个 Inner Iterator 用迭代其中的内层消息
                         innerIter = new RecordsIterator(entry);
-                        return innerIter.next();
+                        return innerIter.next(); // 迭代内层消息
                     }
                 } catch (EOFException e) {
                     return allDone();
@@ -328,8 +335,10 @@ public class MemoryRecords implements Records {
 
         private LogEntry getNextEntry() throws IOException {
             if (logEntries != null)
+                // 从 logEntries 队列中获取 LogEntry
                 return getNextEntryFromEntryList();
             else
+                // 从 buffer 中获取 LogEntry
                 return getNextEntryFromStream();
         }
 
@@ -352,10 +361,11 @@ public class MemoryRecords implements Records {
                 int newPos = buffer.position() + size;
                 if (newPos > buffer.limit())
                     return null;
-                buffer.position(newPos);
+                buffer.position(newPos); // 修改 buffer 的 position
                 rec.limit(size);
             } else {
                 byte[] recordBuffer = new byte[size];
+                // 从 stream 中读取数据，此过程会解压消息
                 stream.readFully(recordBuffer, 0, size);
                 rec = ByteBuffer.wrap(recordBuffer);
             }

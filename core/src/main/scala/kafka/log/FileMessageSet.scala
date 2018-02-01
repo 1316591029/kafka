@@ -81,6 +81,7 @@ class FileMessageSet private[kafka](@volatile var file: File,
    */
   def this(file: File, fileAlreadyExists: Boolean, initFileSize: Int, preallocate: Boolean) =
       this(file,
+        // 需要注意的是，如果使用 preallocate 进行预分配空间，end 会被初始化为 0
         channel = FileMessageSet.openChannel(file, mutable = true, fileAlreadyExists, initFileSize, preallocate),
         start = 0,
         end = if (!fileAlreadyExists && preallocate) 0 else Int.MaxValue,
@@ -135,25 +136,34 @@ class FileMessageSet private[kafka](@volatile var file: File,
    * @param startingPosition The starting position in the file to begin searching from.
    */
   def searchForOffsetWithSize(targetOffset: Long, startingPosition: Int): (OffsetPosition, Int) = {
-    var position = startingPosition
+    var position = startingPosition // 起始位置
+    // 创建用于读取 LogOverhead (即 offset + size) 的 ByteBuffer（长度为 12）
     val buffer = ByteBuffer.allocate(MessageSet.LogOverhead)
-    val size = sizeInBytes()
+    val size = sizeInBytes() // 当前 FileMessageSet 的大小，单位是字节
+
+    // 从 position 开始逐条消息遍历
     while(position + MessageSet.LogOverhead < size) {
-      buffer.rewind()
+      buffer.rewind() // 重置 ByteBuffer 的 position 指针，准备读入数据
+
+      // 读取 LogOverhead。这里会确保 startingPosition 位于一个消息的开头，否则
+      // 读取到的并不是 LogOverhead
       channel.read(buffer, position)
-      if(buffer.hasRemaining)
+      if(buffer.hasRemaining) // 未读取到 12 个字节的 LogOverhead，抛出异常
         throw new IllegalStateException("Failed to read complete buffer for targetOffset %d startPosition %d in %s"
           .format(targetOffset, startingPosition, file.getAbsolutePath))
+      // 重置 ByteBuffer 的 position 指针，准备从 ByteBuffer 中读取数据
       buffer.rewind()
-      val offset = buffer.getLong()
+      val offset = buffer.getLong() // 获取消息的 offset，8 个字节
       val messageSize = buffer.getInt()
       if (messageSize < Message.MinMessageOverhead)
         throw new IllegalStateException("Invalid message size: " + messageSize)
-      if (offset >= targetOffset)
+      if (offset >= targetOffset) // 判断是否符合退出条件
+        // 这里将 offset 和对应的 position （物理地址）封装成 OffsetPosition 这种对象后返回
         return (OffsetPosition(offset, position), messageSize + MessageSet.LogOverhead)
+      // 移动 position，准备读取下个消息
       position += MessageSet.LogOverhead + messageSize
     }
-    null
+    null // 找不到 offset 大于等于 targetOffset 的消息，则返回 null
   }
 
   /**
@@ -351,7 +361,9 @@ class FileMessageSet private[kafka](@volatile var file: File,
    * Append these messages to the message set
    */
   def append(messages: ByteBufferMessageSet) {
+    // 写文件
     val written = messages.writeFullyTo(channel)
+    // 修改 FileMessageSet 的大小
     _size.getAndAdd(written)
   }
 
@@ -443,21 +455,21 @@ object FileMessageSet
    * @param preallocate Pre allocate file or not, gotten from configuration.
    */
   def openChannel(file: File, mutable: Boolean, fileAlreadyExists: Boolean = false, initFileSize: Int = 0, preallocate: Boolean = false): FileChannel = {
-    if (mutable) {
+    if (mutable) { // 根据 mutable 参数创建的 FileChannel 是否可写
       if (fileAlreadyExists)
         new RandomAccessFile(file, "rw").getChannel()
       else {
-        if (preallocate) {
+        if (preallocate) { // 进行文件预分配
           val randomAccessFile = new RandomAccessFile(file, "rw")
           randomAccessFile.setLength(initFileSize)
           randomAccessFile.getChannel()
         }
         else
-          new RandomAccessFile(file, "rw").getChannel()
+          new RandomAccessFile(file, "rw").getChannel() // 创建可读可写的 FileChannel
       }
     }
     else
-      new FileInputStream(file).getChannel()
+      new FileInputStream(file).getChannel() // 创建自读的 FileChannel
   }
 }
 
