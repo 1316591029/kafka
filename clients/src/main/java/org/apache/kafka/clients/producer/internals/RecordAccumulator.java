@@ -60,7 +60,9 @@ public final class RecordAccumulator {
     private static final Logger log = LoggerFactory.getLogger(RecordAccumulator.class);
 
     private volatile boolean closed;
+    // 进程中 flush 次数
     private final AtomicInteger flushesInProgress;
+    // 进程中添加 RecordBatch 的次数
     private final AtomicInteger appendsInProgress;
     /* 指定每个 RecordBatch 底层 ByteBuffer 的大小 */
     private final int batchSize;
@@ -199,11 +201,12 @@ public final class RecordAccumulator {
                 if (closed)
                     throw new IllegalStateException("Cannot send after the producer is closed.");
 
+                /* 这里做了双重检测，以期望获得更好的内存使用率 */
                 /* 7. 对 Deque 加锁后，再次调用 tryAppend() 方法尝试追加 Record */
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
                 if (appendResult != null) { /* 8. 追加成功，则返回 */
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
-                    free.deallocate(buffer); /* 释放 7 申请的新空间 */
+                    free.deallocate(buffer); /* 释放 6 申请的新空间 */
                     return appendResult;
                 }
                 MemoryRecords records = MemoryRecords.emptyRecords(buffer, compression, this.batchSize);
