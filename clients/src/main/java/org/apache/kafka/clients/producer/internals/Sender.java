@@ -171,15 +171,16 @@ public class Sender implements Runnable {
      *            The current POSIX time in milliseconds
      */
     void run(long now) {
-        // 获取集群信息
+        // 1. 从 Metadata 获取集群元数据
         Cluster cluster = metadata.fetch();
         // get the list of partitions with data ready to send
-        // 根据 RecordAccumulator 的缓存情况，选出可以向哪些 Node 节点发送消息，返回 ReadyCheckResult 对象
+        // 2. 调用 RecordAccumulator.ready() 方法，根据 RecordAccumulator 的缓存情况，选出
+        // 可以向哪些 Node 节点发送消息，返回 ReadyCheckResult 对象
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
-        // ready 方法中根据元数据中记录有找不到 Leader 副本的分区
-        // 强制更新元数据
+        // 3. 如果 ReadyCheckResult 中标识有 unkonwnLeadersExist, 则调用 Metadata 的 requestUpdate
+        // 方法，标记需要更新 Kafka 的集群信息。
         if (!result.unknownLeaderTopics.isEmpty()) {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
@@ -191,7 +192,9 @@ public class Sender implements Runnable {
         }
 
         // remove any nodes we aren't ready to send to
-        // 过滤节点
+        // 4. 针对 ReadyCheckResult 中的 readyNodes 集合，循环调用 NetworkClient.ready() 方法，
+        // 目的是检查网络 I/O 方面是否符合发送消息的条件，不符合条件的 Node 将会从 readyNodes 集合
+        // 中删除。
         Iterator<Node> iter = result.readyNodes.iterator();
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
@@ -204,6 +207,7 @@ public class Sender implements Runnable {
         }
 
         // create produce requests
+        // 5. 针对经过步骤 4 处理后的 readyNodes 集合，调用 RecordAccumulator.drain() 方法
         // 获取待发送的消息集合
         Map<Integer, List<RecordBatch>> batches = this.accumulator.drain(cluster,
                                                                          result.readyNodes,
@@ -217,14 +221,17 @@ public class Sender implements Runnable {
             }
         }
 
-        // 处理 RecordAccumulator 超时的消息
+        // 6. 调用 RecordAccumulator.abortExpiredBatches() 方法处理 RecordAccumulator 中超时的消息。
+        // 代码逻辑： 遍历保存的全部 RecordBatch，调用 RecordBatch.maybeExpire() 方法进行处理。如果超时，
+        // 则调用 RecordBatch.done() 方法，其中会触发自定义 Callback，并将 RecordBatch 从队列中移除，
+        // 释放 ByteBuffer 空间
         List<RecordBatch> expiredBatches = this.accumulator.abortExpiredBatches(this.requestTimeout, now);
         // update sensors
         for (RecordBatch expiredBatch : expiredBatches)
             this.sensors.recordErrors(expiredBatch.topicPartition.topic(), expiredBatch.recordCount);
 
         sensors.updateProduceRequestMetrics(batches);
-        // 将待发送的消息封装成 ClientRequest
+        // 调用 Sender.createProduceRequests() 方法将待发送的消息封装成 ClientRequest
         List<ClientRequest> requests = createProduceRequests(batches, now);
         // If we have any nodes that are ready to send + have sendable data, poll with 0 timeout so this can immediately
         // loop and try sending more data. Otherwise, the timeout is determined by nodes that have partitions with data
@@ -236,16 +243,16 @@ public class Sender implements Runnable {
             log.trace("Created {} produce requests: {}", requests.size(), requests);
             pollTimeout = 0;
         }
+        // 8. 调用 NetworkClient.send() 方法，将 ClientRequest 写入 KafkaChannel 的 send 字段
         for (ClientRequest request : requests)
-            // 调用 send 将 ClientRequest 写入 KafkaChannel
             client.send(request, now);
 
         // if some partitions are already ready to be sent, the select time would be 0;
         // otherwise if some partition already has some data accumulated but not ready yet,
         // the select time will be the time difference between now and its linger expiry time;
         // otherwise the select time will be the time difference between now and the metadata expiry time;
-        // 将 KafkaChannel.send 字段中保存的 ClientRequest 发送出去，同时
-        // 还会处理服务器发回的响应、处理超时的请求、调用用户自定义 Callback 等
+        // 9. 调用 NetworkClient.poll() 方法，将 KafkaChannel.send 字段中保存的 ClientRequest 发送出去，
+        // 同时，还会处理服务端发回的响应、处理超时的请求、调用用户自定义 Callback 等。
         this.client.poll(pollTimeout, now);
     }
 
