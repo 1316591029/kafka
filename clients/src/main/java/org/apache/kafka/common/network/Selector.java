@@ -175,19 +175,15 @@ public class Selector implements Selectable {
         if (this.channels.containsKey(id))
             throw new IllegalStateException("There is already a connection for id " + id);
 
-        // 创建 SocketChannel
-        SocketChannel socketChannel = SocketChannel.open();
-        // 配置为非阻塞模式
-        socketChannel.configureBlocking(false);
+        SocketChannel socketChannel = SocketChannel.open(); // 创建 SocketChannel
+        socketChannel.configureBlocking(false); // 配置为非阻塞模式
         Socket socket = socketChannel.socket();
-        // 设置为长连接
-        socket.setKeepAlive(true);
-        // 设置 SO_SNDBUF 大小
+        socket.setKeepAlive(true); // 设置为长连接
+
         if (sendBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
-            socket.setSendBufferSize(sendBufferSize);
-        // 设置 SO_RCVBUF 大小
+            socket.setSendBufferSize(sendBufferSize); // 设置 SO_SNDBUF 大小
         if (receiveBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
-            socket.setReceiveBufferSize(receiveBufferSize);
+            socket.setReceiveBufferSize(receiveBufferSize); // 设置 SO_RCVBUF 大小
         socket.setTcpNoDelay(true);
         boolean connected;
         try {
@@ -303,14 +299,14 @@ public class Selector implements Selectable {
         if (timeout < 0)
             throw new IllegalArgumentException("timeout should be >= 0");
 
-        clear();
+        clear(); // 将上一次 poll() 方法的结果全部清除掉
 
         if (hasStagedReceives() || !immediatelyConnectedKeys.isEmpty())
             timeout = 0;
 
         /* check ready keys */
         long startSelect = time.nanoseconds();
-        // 等待 I/O 事件发生
+        // 调用 nioSelector.select() 方法, 等待 I/O 事件发生
         int readyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());
@@ -321,19 +317,20 @@ public class Selector implements Selectable {
             pollSelectionKeys(immediatelyConnectedKeys, true, endSelect);
         }
 
-        // 读取到了一个完整的 NetworkReceive
-        // 将 stagedReceives 复制到 completedReceives 集合中
-        addToCompletedReceives();
+        addToCompletedReceives(); // 将 stagedReceives 复制到 completedReceives 集合中
 
         long endIo = time.nanoseconds();
         this.sensors.ioTime.record(endIo - endSelect, time.milliseconds());
 
         // we use the time at the end of select to ensure that we don't close any connections that
         // have just been processed in pollSelectionKeys
-        // 关闭长期空闲的连接
-        maybeCloseOldestConnection(endSelect);
+        maybeCloseOldestConnection(endSelect); // 关闭长期空闲的连接
     }
 
+    /**
+     * 处理 I/O 操作的核心方法，其中会分别处理 OP_CONNECT、OP_READ、OP_WRITE 事件，
+     * 并且会检测连接状态。
+     */
     private void pollSelectionKeys(Iterable<SelectionKey> selectionKeys,
                                    boolean isImmediatelyConnected,
                                    long currentTimeNanos) {
