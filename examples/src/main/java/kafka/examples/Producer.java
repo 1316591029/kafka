@@ -16,33 +16,44 @@
  */
 package kafka.examples;
 
-import org.apache.kafka.clients.producer.Callback;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.clients.producer.*;
 
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Producer extends Thread {
     private final KafkaProducer<Integer, String> producer;
     private final String topic;
     private final Boolean isAsync;
+    private final AtomicBoolean isRun = new AtomicBoolean(true);
 
     public Producer(String topic, Boolean isAsync) {
         Properties props = new Properties();
         props.put("bootstrap.servers", "localhost:9092");
-        props.put("client.id", "DemoProducer");
-        props.put("key.serializer", "org.apache.kafka.common.serialization.IntegerSerializer");
-        props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        props.put(ProducerConfig.CLIENT_ID_CONFIG, "DemoProducer");
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.IntegerSerializer");
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer");
+        props.put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG, "kafka.examples.ProducerInterceptorDemo");
         producer = new KafkaProducer<>(props);
         this.topic = topic;
         this.isAsync = isAsync;
     }
 
+    public static void main(String[] args)  throws Exception {
+        Producer producer = new Producer("test", false);
+        producer.start();
+        Thread.sleep(1000);
+        producer.stopRun();
+    }
+
+    public void stopRun() {
+        isRun.compareAndSet(true, false);
+    }
+
     public void run() {
         int messageNo = 1;
-        while (true) {
+        while (isRun.get()) {
             String messageStr = "Message_" + messageNo;
             long startTime = System.currentTimeMillis();
             if (isAsync) { // Send asynchronously
