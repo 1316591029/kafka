@@ -76,9 +76,11 @@ public class MemoryRecords implements Records {
      * Append the given record and offset to the buffer
      */
     public void append(long offset, Record record) {
+        // 判断其是否可写
         if (!writable)
             throw new IllegalStateException("Memory records is not writable");
 
+        // 将数据写入 ByteBuffer 中
         int size = record.size();
         compressor.putLong(offset);
         compressor.putInt(size);

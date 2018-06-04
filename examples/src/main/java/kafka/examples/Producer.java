@@ -34,7 +34,7 @@ public class Producer extends Thread {
         props.put(ProducerConfig.CLIENT_ID_CONFIG, "DemoProducer");
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.IntegerSerializer");
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer");
-        props.put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG, "kafka.examples.ProducerInterceptorDemo");
+//        props.put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG, "kafka.examples.ProducerInterceptorDemo");
         producer = new KafkaProducer<>(props);
         this.topic = topic;
         this.isAsync = isAsync;
