@@ -45,6 +45,7 @@ public final class BufferPool {
 
     /* 记录了整个 Pool 的大小 */
     private final long totalMemory;
+    /* BufferPool 管理 ByteBuffer 的特定大小 */
     private final int poolableSize;
     /* 因为有多线程并发分配和回收 ByteBuffer，所以使用锁控制并发，保证线程安全 */
     private final ReentrantLock lock;
