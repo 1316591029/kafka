@@ -29,6 +29,11 @@ public class Consumer extends ShutdownableThread {
     private final KafkaConsumer<Integer, String> consumer;
     private final String topic;
 
+    public static void main(String[] args) {
+        Consumer consumerThread = new Consumer("test");
+        consumerThread.start();
+    }
+
     public Consumer(String topic) {
         super("KafkaConsumerExample", false);
         Properties props = new Properties();
