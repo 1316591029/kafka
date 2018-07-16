@@ -619,7 +619,9 @@ public abstract class AbstractCoordinator implements Closeable {
      * @return the current coordinator or null if it is unknown
      */
     protected synchronized Node coordinator() {
+         // 检测 Coordinator 字段是否为 null，检测与 GroupCoordinator 之间的网络连接是否正常
         if (coordinator != null && client.connectionFailed(coordinator)) {
+            // 将 unsent 集合中对应的请求清空并将 coordinator 字段设置为 null
             coordinatorDead();
             return null;
         }
@@ -725,7 +727,7 @@ public abstract class AbstractCoordinator implements Closeable {
             sensors.heartbeatLatency.record(response.requestLatencyMs());
             // 解析错误码
             Errors error = Errors.forCode(heartbeatResponse.errorCode());
-            if (error == Errors.NONE) {
+            if (error == Errors.NONE) { // 心跳正常
                 log.debug("Received successful heartbeat response for group {}", groupId);
                 future.complete(null);
             } else if (error == Errors.GROUP_COORDINATOR_NOT_AVAILABLE
@@ -766,15 +768,15 @@ public abstract class AbstractCoordinator implements Closeable {
             // mark the coordinator as dead
             if (e instanceof DisconnectException)
                 coordinatorDead();
-            future.raise(e);
+            future.raise(e); // 调用 adapted 对象的 raise() 方法
         }
 
         @Override
         public void onSuccess(ClientResponse clientResponse, RequestFuture<T> future) {
             try {
                 this.response = clientResponse;
-                R responseObj = parse(clientResponse);
-                handle(responseObj, future);
+                R responseObj = parse(clientResponse); // 解析 ClientResponse
+                handle(responseObj, future); // 调用 handler() 方法进行处理，子类实现
             } catch (RuntimeException e) {
                 if (!future.isDone())
                     future.raise(e);
