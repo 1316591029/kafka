@@ -233,7 +233,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         subscriptions.assignFromSubscribed(assignment.partitions());
 
         // give the assignor a chance to update internal state based on the received assignment
-        // 回调函数
+        // 根据收到的分区信息更新策略
         assignor.onAssignment(assignment);
 
         // reschedule the auto commit starting from now
@@ -245,7 +245,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         log.info("Setting newly assigned partitions {} for group {}", subscriptions.assignedPartitions(), groupId);
         try {
             Set<TopicPartition> assigned = new HashSet<>(subscriptions.assignedPartitions());
-            // 回调 ConsumerRebalanceListener
+            // 回调 ConsumerRebalanceListener，指定分区结果
             listener.onPartitionsAssigned(assigned);
         } catch (WakeupException e) {
             throw e;

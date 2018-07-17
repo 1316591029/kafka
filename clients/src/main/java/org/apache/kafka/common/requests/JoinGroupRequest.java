@@ -37,12 +37,12 @@ public class JoinGroupRequest extends AbstractRequest {
 
     public static final String UNKNOWN_MEMBER_ID = "";
 
-    private final String groupId;
-    private final int sessionTimeout;
-    private final int rebalanceTimeout;
-    private final String memberId;
-    private final String protocolType;
-    private final List<ProtocolMetadata> groupProtocols;
+    private final String groupId;  // Consumer Group 的 id
+    private final int sessionTimeout; // GroupCoordinator 超过 session_time 指定的时间，没有收到请求，则认为消费者下线
+    private final int rebalanceTimeout; // 同 sessionTimeout，新版本字段
+    private final String memberId; // GroupCoordinator 分配给消费者的 id
+    private final String protocolType; // Consumer Group 实现的协议，默认是 "consumer"
+    private final List<ProtocolMetadata> groupProtocols; //针对不同的 PartitionAssignor，序列号后的消费者的订阅信息，其中包含用户自定义数据 userData
 
     public static class ProtocolMetadata {
         private final String name;

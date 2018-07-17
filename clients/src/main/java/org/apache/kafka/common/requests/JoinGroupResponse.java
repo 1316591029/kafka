@@ -53,12 +53,12 @@ public class JoinGroupResponse extends AbstractRequestResponse {
     public static final int UNKNOWN_GENERATION_ID = -1;
     public static final String UNKNOWN_MEMBER_ID = "";
 
-    private final short errorCode;
-    private final int generationId;
-    private final String groupProtocol;
-    private final String memberId;
-    private final String leaderId;
-    private final Map<String, ByteBuffer> members;
+    private final short errorCode; // 错误码
+    private final int generationId; // GroupCoordinator 分配的年代信息
+    private final String groupProtocol; // GroupCoordinator 选择的 PartitionAssignor
+    private final String memberId; // GroupCoordinator 分配给消费者的 Id
+    private final String leaderId; // Leader 的 member_id
+    private final Map<String, ByteBuffer> members; // Consumer Group 中全部的消费者的订阅信息
 
     public JoinGroupResponse(short errorCode,
                              int generationId,

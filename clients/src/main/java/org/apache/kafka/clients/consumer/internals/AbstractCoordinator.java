@@ -328,7 +328,7 @@ public abstract class AbstractCoordinator implements Closeable {
 
             if (future.succeeded()) {
                 needsJoinPrepare = true;
-                // 从 SyncGroupResponse 中得到的分区分配结果最终由厦门方法进行处理
+                // 从 SyncGroupResponse 中得到的分区分配结果最终由方法进行处理
                 onJoinComplete(generation.generationId, generation.memberId, generation.protocol, future.value());
             } else { // 处理异常
                 RuntimeException exception = future.exception();
@@ -435,12 +435,18 @@ public abstract class AbstractCoordinator implements Closeable {
                         // the group. In this case, we do not want to continue with the sync group.
                         future.raise(new UnjoinedGroupException());
                     } else {
-                        // 更新 generation
+                        // 解析 JoinGroupResponse，更新到本地
                         AbstractCoordinator.this.generation = new Generation(joinResponse.generationId(),
                                 joinResponse.memberId(), joinResponse.groupProtocol());
                         AbstractCoordinator.this.rejoinNeeded = false;
-                        // 这里是发送 SyncGroupRequest 的入口
-                        if (joinResponse.isLeader()) {
+                        if (joinResponse.isLeader()) { // 判断是否是 Leader
+                            /*
+                             * 注意这里，此 future 是在前面 sendJoinGroupRequest() 返回
+                             * 的 RequestFuture 对象，在 onJoinLeader() 和 onJoinFollower() 方法中，
+                             * 都涉及发送 SyncGroupRequest 逻辑，返回的 RequestFuture 标识的
+                             * 是 SyncGroupRequest 的完成情况。这里使用 chain() 方法，主要实现的功能
+                             * 是：当 SyncGroupResponse 处理完成后，再通知此 future 对象。
+                             */
                             onJoinLeader(joinResponse).chain(future);
                         } else {
                             onJoinFollower().chain(future);
