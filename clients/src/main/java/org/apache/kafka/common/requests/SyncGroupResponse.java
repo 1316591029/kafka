@@ -40,8 +40,8 @@ public class SyncGroupResponse extends AbstractRequestResponse {
      * GROUP_AUTHORIZATION_FAILED (30)
      */
 
-    private final short errorCode;
-    private final ByteBuffer memberState;
+    private final short errorCode; // 错误码
+    private final ByteBuffer memberState; // 分配给当前消费者的分区
 
     public SyncGroupResponse(short errorCode, ByteBuffer memberState) {
         super(new Struct(CURRENT_SCHEMA));

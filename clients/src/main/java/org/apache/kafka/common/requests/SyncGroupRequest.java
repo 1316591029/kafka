@@ -37,10 +37,10 @@ public class SyncGroupRequest extends AbstractRequest {
     public static final String MEMBER_ASSIGNMENT_KEY_NAME = "member_assignment";
     public static final String GROUP_ASSIGNMENT_KEY_NAME = "group_assignment";
 
-    private final String groupId;
-    private final int generationId;
-    private final String memberId;
-    private final Map<String, ByteBuffer> groupAssignment;
+    private final String groupId; // Consumer Group 的 Id
+    private final int generationId; // 消费者保存的年代信息
+    private final String memberId; // GroupCoordinator 分配给消费者的 id
+    private final Map<String, ByteBuffer> groupAssignment; // 分区分配结果
 
     public SyncGroupRequest(String groupId,
                             int generationId,

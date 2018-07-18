@@ -233,7 +233,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         subscriptions.assignFromSubscribed(assignment.partitions());
 
         // give the assignor a chance to update internal state based on the received assignment
-        // 根据收到的分区信息更新策略
+        // 给当前分区策略回调使用，默认空实现，用户可自行实现
         assignor.onAssignment(assignment);
 
         // reschedule the auto commit starting from now
