@@ -60,18 +60,18 @@ public class OffsetCommitRequest extends AbstractRequest {
     @Deprecated
     public static final long DEFAULT_TIMESTAMP = -1L;            // for V0, V1
 
-    private final String groupId;
-    private final String memberId;
-    private final int generationId;
-    private final long retentionTime;
-    private final Map<TopicPartition, PartitionData> offsetData;
+    private final String groupId; // Consumer Group 的 id
+    private final String memberId; // GroupCoordinator 分配给消费者的 id
+    private final int generationId; // 消费者保存的年代信息
+    private final long retentionTime; // 此 offset 的最长保存时间
+    private final Map<TopicPartition, PartitionData> offsetData; // topic - offset 数据
 
     public static final class PartitionData {
         @Deprecated
         public final long timestamp;                // for V1
 
-        public final long offset;
-        public final String metadata;
+        public final long offset; // 提交的消息 offset
+        public final String metadata; // 任何希望与 offset 一起保存的自定义数据
 
         @Deprecated
         public PartitionData(long offset, long timestamp, String metadata) {

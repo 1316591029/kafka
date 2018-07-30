@@ -54,7 +54,7 @@ public class OffsetCommitResponse extends AbstractRequestResponse {
      * GROUP_AUTHORIZATION_FAILED (30)
      */
 
-    private final Map<TopicPartition, Short> responseData;
+    private final Map<TopicPartition, Short> responseData; // topic - 错误码
 
     public OffsetCommitResponse(Map<TopicPartition, Short> responseData) {
         super(new Struct(CURRENT_SCHEMA));

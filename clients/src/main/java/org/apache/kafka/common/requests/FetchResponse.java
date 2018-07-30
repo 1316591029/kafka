@@ -65,12 +65,12 @@ public class FetchResponse extends AbstractRequestResponse {
     public static final ByteBuffer EMPTY_RECORD_SET = ByteBuffer.allocate(0);
 
     private final LinkedHashMap<TopicPartition, PartitionData> responseData;
-    private final int throttleTime;
+    private final int throttleTime; // 限流使用
 
     public static final class PartitionData {
-        public final short errorCode;
-        public final long highWatermark;
-        public final ByteBuffer recordSet;
+        public final short errorCode; // 错误码
+        public final long highWatermark; // Leader 的 highWatemark
+        public final ByteBuffer recordSet; // fetch 到的消息数据
 
         public PartitionData(short errorCode, long highWatermark, ByteBuffer recordSet) {
             this.errorCode = errorCode;

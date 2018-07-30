@@ -768,7 +768,9 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         @Override
         public void handle(OffsetFetchResponse response, RequestFuture<Map<TopicPartition, OffsetAndMetadata>> future) {
+            // 记录从服务端获取的 offset 集合
             Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>(response.responseData().size());
+            // 处理 OffsetFetchResponse 中的每个分区
             for (Map.Entry<TopicPartition, OffsetFetchResponse.PartitionData> entry : response.responseData().entrySet()) {
                 TopicPartition tp = entry.getKey();
                 OffsetFetchResponse.PartitionData data = entry.getValue();
@@ -791,12 +793,14 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                     return;
                 } else if (data.offset >= 0) {
                     // record the position with the offset (-1 indicates no committed offset to fetch)
+                    // 记录正常的 offset
                     offsets.put(tp, new OffsetAndMetadata(data.offset, data.metadata));
                 } else {
                     log.debug("Group {} has no committed offset for partition {}", groupId, tp);
                 }
             }
 
+            // 传播 offsets 集合，最终通过 fetchCommittedOffsets() 方法返回
             future.complete(offsets);
         }
     }

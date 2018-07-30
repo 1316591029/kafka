@@ -48,15 +48,16 @@ public class FetchRequest extends AbstractRequest {
     // default values for older versions where a request level limit did not exist
     public static final int DEFAULT_RESPONSE_MAX_BYTES = Integer.MAX_VALUE;
 
+    // 用来标识 Follower 的 id，Consumer 和 Follower 都会使用 FetchRequest 从 Leader 那里拉取消息，Consumer 默认是 -1
     private final int replicaId;
-    private final int maxWait;
-    private final int minBytes;
-    private final int maxBytes;
-    private final LinkedHashMap<TopicPartition, PartitionData> fetchData;
+    private final int maxWait; // 请求最大的等待时间
+    private final int minBytes; // 响应最小负载
+    private final int maxBytes; // 每次 fetch 的最大字节数
+    private final LinkedHashMap<TopicPartition, PartitionData> fetchData; // Topic 对应拉取的请求数据字段
 
     public static final class PartitionData {
-        public final long offset;
-        public final int maxBytes;
+        public final long offset; // 需要 fetch 的消息 offset
+        public final int maxBytes;  // 每次 fetch 的最大字节数
 
         public PartitionData(long offset, int maxBytes) {
             this.offset = offset;

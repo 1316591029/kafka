@@ -97,6 +97,7 @@ public class Fetcher<K, V> {
     private final boolean checkCrcs;
     private final Metadata metadata;
     private final FetchManagerMetrics sensors;
+    // 记录每个 TopicPartition 的消费情况
     private final SubscriptionState subscriptions;
     // 每个 FetchResponse 首先会转换成 CompletedFetch 对象进行次队列缓存，此时并未解析消息
     private final ConcurrentLinkedQueue<CompletedFetch> completedFetches;
