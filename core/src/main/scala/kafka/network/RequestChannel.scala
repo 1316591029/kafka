@@ -52,14 +52,14 @@ object RequestChannel extends Logging {
   case class Request(processor: Int, connectionId: String, session: Session, private var buffer: ByteBuffer, startTimeMs: Long, securityProtocol: SecurityProtocol) {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
     // handler threads or the purgatory threads
-    // 存在跨线程的比较和修改
+    // 存在跨线程的比较和修改使用 @volatile 保证可见性
     @volatile var requestDequeueTimeMs = -1L
     @volatile var apiLocalCompleteTimeMs = -1L
     @volatile var responseCompleteTimeMs = -1L
     @volatile var responseDequeueTimeMs = -1L
     @volatile var apiRemoteCompleteTimeMs = -1L
 
-    val requestId = buffer.getShort()
+    val requestId = buffer.getShort() // 请求类型 ID
 
     // TODO: this will be removed once we migrated to client-side format
     // for server-side request / response format
@@ -77,7 +77,7 @@ object RequestChannel extends Logging {
 
     // if we failed to find a server-side mapping, then try using the
     // client-side request / response format
-    val header: RequestHeader =
+    val header: RequestHeader = // 请求头
       if (requestObj == null) {
         buffer.rewind
         try RequestHeader.parse(buffer)
@@ -87,13 +87,14 @@ object RequestChannel extends Logging {
         }
       } else
         null
-    val body: AbstractRequest =
+    val body: AbstractRequest = // 请求体
       if (requestObj == null)
         try {
           // For unsupported version of ApiVersionsRequest, create a dummy request to enable an error response to be returned later
           if (header.apiKey == ApiKeys.API_VERSIONS.id && !Protocol.apiVersionSupported(header.apiKey, header.apiVersion))
             new ApiVersionsRequest
           else
+            // 解析请求体
             AbstractRequest.getRequest(header.apiKey, header.apiVersion, buffer)
         } catch {
           case ex: Throwable =>
@@ -229,6 +230,7 @@ class RequestChannel(val numProcessors /* Processor线程数 & responseQueues �
   }
 
   /** No operation to take for the request, need to read more over the network */
+  // 向对应 responseQueue 队列中添加 NoOpAction 类型的 Response
   def noOperation(processor: Int, request: RequestChannel.Request) {
     responseQueues(processor).put(new RequestChannel.Response(processor, request, null, RequestChannel.NoOpAction))
     for(onResponse <- responseListeners) // 调用 responseListeners
@@ -236,6 +238,7 @@ class RequestChannel(val numProcessors /* Processor线程数 & responseQueues �
   }
 
   /** Close the connection for the request */
+  // 向对应 responseQueue 队列添加 CloseConnectionAction 类型的 Response
   def closeConnection(processor: Int, request: RequestChannel.Request) {
     responseQueues(processor).put(new RequestChannel.Response(processor, request, null, RequestChannel.CloseConnectionAction))
     for(onResponse <- responseListeners) // 调用 responseListeners

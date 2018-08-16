@@ -688,6 +688,7 @@ public class Fetcher<K, V> {
 
     /**
      * The callback for fetch completion
+     * 实现解析 CompletedFetch
      */
     private PartitionRecords<K, V> parseFetchedData(CompletedFetch completedFetch) {
         TopicPartition tp = completedFetch.partition;
